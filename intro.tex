@@ -1,0 +1,98 @@
+% What problem are you going to solve.
+Spectral analysis \cite{} is a fundamental tool for both graph analysis and
+other areas of data mining. Essentially, it computes
+eigenvalues and eigenvectors of graphs to infer properties of graphs.
+spectral clustering \cite{Ng01, Sussman12}, triangle counting \cite{Tsourakakis08}.
+Many real-world graphs are massive: Facebook's social network has billions
+of vertices and today's web graph is even much larger.
+
+% Why is it hard?
+
+It is computationally expensive to compute all eigenvalues and
+eigenvectors of a large matrix. The computation complexity is
+$O(n^3)$ on a square matrix \cite{Pan99}, where $n$ is the number of rows
+and columns of the matrix.
+When the size of a matrix grows to millions or even billions of rows and
+columns, it becomes prohibitive to compute all eigenvalues and
+eigenvectors.
+
+Numerous algorithms \cite{Lanczos, IRLM, krylovschur, Arbenz05} have been
+developed to compute a small number of eigenpairs.
+The current popular eigensolver packages such as ARPACK \cite{arpack}
+and Anasazi \cite{anasazi} have state-of-art eigensolvers
+capable of computing a few eigenvalues with certain properties such as
+the eigenvalues of the largest or smallest magnitude. All of these eigensolvers
+perform a sequence of sparse matrix multiplication to construct and update
+a vector subspace $S \in \mathbb{R}^{n \times m}$, where $n$ is the size of
+the eigenproblem and $m$ is the subspace size \cite{Arbenz05}. In addition,
+they perform multiple matrix operations on very large dense matrices that
+stores the vector subspace. When computing eigenpairs of a graph
+at the billion scale, neither the sparse matrix that represents a graph nor
+the dense matrices can be stored in RAM in a single machine.
+
+%How have others addressed the problem?
+Therefore, large-scale eigendecomposition is generally solved in a large cluster
+or a supercomputer \cite{anasazi, slepc}, where the aggregated memory is
+sufficient to store the sparse matrix and the dense matrices for
+the subspace. However, many real-world graphs have the power-law distribution
+in vertex degree and near-random vertex connection. Sparse matrix multiplication
+on such a graph leads to significant network communication. As such, it requires
+fast network to achieve overall performance. However, a supercomputer or a large
+cluster with fast network communication is not accessible to many people.
+
+%What is the nature of your solution?
+
+We build FlashEigen, an external-memory eigensolver, to solve a large eigenproblem
+with SSDs in a single machine. 
+%Today's SSDs or SSD arrays
+%are capable of delivering over a million random IOPS or multiple GB/s of
+%sequential I/O \cite{safs}. Given such I/O performance, it is possible to
+%achieve nearly in-memory performance for large-scale graph analysis using SSDs
+%\cite{flashgraph}. In this paper, we focus on utilizing SSDs for
+%spectral graph analysis as well as general linear algebra.
+Instead of developing a new eigensolver from scratch, we leverage
+the Anasazi framework and implement SSD-based matrix operations
+for the framework. FlashEigen is specifically optimized for the Block
+Krylov-Schur \cite{krylovschur} eigensolver because it is the fastest and
+generates the least I/O among the Anasazi eigensolvers when computing
+eigenvalues of many power-law graphs. The Anasazi eigensolvers implement
+a block extension, which enables the eigensolvers to update multiple vectors
+in the subspace in each iteration to increase computation density and amortize
+I/O overhead. As a result, the eigensolvers require sparse matrix dense matrix
+multiplication (SpMM). We perform SpMM in a semi-external memory fashion, i.e.,
+the sparse matrix on SSDs and the input dense matrix in memory. Given a graph
+with hundreds of millions of vertices or even billions of vertices,
+the vector subspace constructed by the eigensolvers requires very large storage
+size, usually much larger than the sparse matrix. Therefore, FlashEigen stores
+the entire vector subspace on SSDs.
+
+Although SSDs can deliver high IOPS and sequential I/O throughput, we have
+to overcome many technical challenges to construct an external-memory
+eigensolver with performance comparable to in-memory eigensolvers.
+SSDs are an order of magnitude slower than DRAM in throughput. Furthermore,
+SSDs wear out after we write data to them. For example, some enterprise SSDs
+\cite{} only allows one DWPD (diskful writes per day).
+
+We specifically optimize semi-external memory sparse matrix dense matrix
+multiplication for many real-world graphs that have nearly random vertex
+connection and power-law distribution in vertex degree. We deploy a series of
+optimizations for both in-memory computation and I/O.
+NUMA, blocking, vectorization, compress sparse matrix, split the dense matrix
+so that we can still use semi-external memory SpMM.
+
+We further deploy optimizations on dense matrix operations to reduce I/O and
+fully utilize the I/O bandwidth of the SSDs.
+To reduce I/O and the amount of data written to SSDs, we use lazy evaluation.
+caching if the dense matrix is very narrow.
+
+% Why is it new/different/special?
+
+% What are it's key features?
+
+Out result shows that the SSD-based KrylovSchur eigensolver is able to achieve
+about 50\% performance of its in-memory implementation and the original
+KrylovSchur in the Anasazi framework on a machine with 48 CPU cores for
+computing various numbers of eigenvalues. Furthermore, it is
+capable of scaling to a graph with 3.4 billion vertices and 129 billion edges.
+It takes xxx hours to compute xxx singular values of the billion-node direct graph
+and use xxx GB memory.

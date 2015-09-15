@@ -1,0 +1,153 @@
+\section{Experimental Evaluation}
+
+We use a very large SAFS RAID block size. We should mention the sequential I/O performance
+of the SSD array.
+
+\subsection{Matrix multiplication}
+
+Matrix multiplication is the most important operation in an eigensolver.
+Both sparse matrix multiplication and dense matrix multiplication together
+account for most of the computation.
+
+\subsubsection{Sparse matrix dense matrix multiplication}
+This section evaluates the performance of the in-memory (mem), semi-external-memory
+(SEM) and external-memory (EM) version of SpMM in our eigensolvers. We compares
+their performance with that of Intel MKL implementation.
+We should vary the number of columns in the dense matrix to show that EM SpMM and SEM SpMM will
+eventually catch the performance of in-mem SpMM. Another point is that our SpMM outperforms
+Intel MKL.
+
+\dz{I should also plot a chart to show the effectiveness of each optimization
+in SpMM.}
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{spmm}
+		\vspace{-15pt}
+		\caption{The performance of the in-memory, SEM and EM implementations
+			of SpMM in our eigensolvers on the Friendster graph. The performance
+			is normalized to the Intel MKL. \dz{measure the SEM performance.}}
+		\label{perf:spmm}
+	\end{center}
+\end{figure}
+
+One of the reason that MKL is slow is that MKL cannot balance the load well.
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{spmm-pg}
+		\vspace{-15pt}
+		\caption{The performance of the in-memory, SEM and EM version of SpMM
+			in our eigensolvers on the page graph.}
+		\label{perf:spmm_pg}
+	\end{center}
+\end{figure}
+
+\subsubsection{Dense matrix multiplication}
+
+Figure \ref{perf:mat_mul} shows the relative performance of the in-memory
+and external memory version of dense matrix multiplication.
+There is a large gap between in-memory and external-memory implementation.
+The SSDs are the bottleneck. This is not surprising because the sequential
+I/O performance of SSDs is an order of magnitude smaller than RAM.
+However, this indicates that we can use the extra computation to save I/O.
+When the number of columns in the dense matrices increase, the performance
+gap gets smaller, which indicates that when computing more eigenpairs,
+the performance gap between in-memory and external-memory eigensolvers
+will be smaller.
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{mat_mul}
+		\vspace{-15pt}
+		\caption{The performance of in-memory and EM implementations of two types
+			of matrix multiplication: a tall matrix ($200M \times X$) times
+			a small matrix ($X \times X$) and a wide matrix ($X \times 200M$)
+			times a tall matrix ($200M \times X$). Their performance is
+		normalized by the corresponding Intel MKL implementations.}
+		\label{perf:mat_mul}
+	\end{center}
+\end{figure}
+
+\dz{Further optimize the in-memory dense matrix multiplication.}
+
+\subsection{Lazy evaluation}
+How effective are the optimizations for a group of dense matrix operations?
+
+In this section, we evaluate how aggressively we should materialize virtual
+matrices. What is the sweet spot that balance computation and I/O.
+
+We should plot a chart with multiple lines:
+in-mem version with all matrices materialized,
+in-mem version with matrices lazily evaluated,
+EM version with all matrices materialized,
+EM version with matrices lazily evaluated.
+
+In this chart, we only count the time used by dense matrix operations.
+
+\subsection{Compare EM eigensolvers with in-memory eigensolvers}
+We compare our EM eigensolvers with our in-mem eigensolvers as well as the original
+Anasazi eigensolvers. For the in-mem eigensolver, it should also have two versions.
+One version is to materialize all dense matrix operations and the other version is
+to materialize virtual matrices in the same approach as the EM eigensolvers.
+
+\subsubsection{Tuning the eigensolver for faster convergence}
+We need to trade off memory/disk space with speed and the number of writes.
+The larger column matrix we store, the fewer iterations are required. However,
+it is unclear how a large column matrix affects the amount of data written disks.
+If we implement dense matrix operations naively, a large column matrix helps to
+reduce the amount of data written to disks; if we avoid materializing a dense
+matrix every time we generate a dense matrix, a smaller column matrix potentially
+reduce the amount of data written to disks.
+
+\begin{table}
+	\begin{center}
+		\small
+		\begin{tabular}{|c|c|c|c|c|}
+			\hline
+			eigensolver & block size & the number of blocks \\
+			\hline
+			Krylov-Schur & 4 & \# eigenpairs \\
+			\hline
+			Davidson & \# eigenpairs & 8 \\
+			\hline
+			LOBPCG &  & N/A \\
+			\hline
+		\end{tabular}
+		\normalsize
+	\end{center}
+	\caption{}
+	\label{eigen_conf}
+\end{table}
+
+The block eigensolvers have two parameters that significantly affect
+the convergence rate. One is the block size, which determines the number
+of vectors in the subspace that operate together. The other is the number
+of blocks. Table \ref{eigen_conf} summaries the configuration that performs
+well in general for different numbers of eigenpairs and different eigenvalue
+problems. The LOBPCG eigensolver is the special case that only allows users
+to specify the block size.
+
+The computation complexity increases roughly linearly with the number of blocks
+and the square of the block size.
+
+\subsubsection{Performance of eigensolvers}
+
+When computing hundreds of eigenpairs, an EM eigensolver may be able to outperform
+an in-mem version.
+
+To compute hundreds of eigenpairs, we need a large block size, which means
+the dense matrix has a large number of columns. EM multiplication of such
+a large matrix has performance similar to in-mem version. Furthermore,
+to compute such a large number of eigenpairs, we need a lot of memory to
+store the vectors in the basis. The EM eigensolver can store more vectors
+for the basis and thus has a faster convergance rate.
+
+We need to show how much read and write we save with lazy evaluation. We should
+also show how much multiplication the lazy evaluation causes.

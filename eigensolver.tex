@@ -1,0 +1,176 @@
+% TEMPLATE for Usenix papers, specifically to meet requirements of
+%  USENIX '05
+% originally a template for producing IEEE-format articles using LaTeX.
+%   written by Matthew Ward, CS Department, Worcester Polytechnic Institute.
+% adapted by David Beazley for his excellent SWIG paper in Proceedings,
+%   Tcl 96
+% turned into a smartass generic template by De Clarke, with thanks to
+%   both the above pioneers
+% use at your own risk.  Complaints to /dev/null.
+% make it two column with no page numbering, default is 10 point
+
+% Munged by Fred Douglis <douglis@research.att.com> 10/97 to separate
+% the .sty file from the LaTeX source template, so that people can
+% more easily include the .sty file into an existing document.  Also
+% changed to more closely follow the style guidelines as represented
+% by the Word sample file. 
+
+% Note that since 2010, USENIX does not require endnotes. If you want
+% foot of page notes, don't include the endnotes package in the 
+% usepackage command, below.
+
+% This version uses the latex2e styles, not the very ancient 2.09 stuff.
+\documentclass[letterpaper,twocolumn,10pt]{article}
+%\usepackage{usenix,epsfig,endnotes}
+\usepackage{usenix}
+\usepackage{epsfig}
+\usepackage{comment}
+%\usepackage{subfigure}
+\usepackage[pdftex]{color}
+\usepackage{url}
+\usepackage{listings}
+\usepackage{textcomp}
+\usepackage{gnuplot-lua-tikz}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{minted}
+\usepackage{bm}
+\usepackage{paralist}
+\usepackage{ulem}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\definecolor{lbcolor}{rgb}{0.9,0.9,0.9}
+
+\lstset{
+	backgroundcolor=\color{lbcolor},
+		tabsize=4,
+		rulecolor=,
+		language=matlab,
+		basicstyle=\scriptsize,
+		upquote=true,
+		aboveskip={1.5\baselineskip},
+		columns=fixed,
+		showstringspaces=false,
+		extendedchars=true,
+		breaklines=true,
+		prebreak = \raisebox{0ex}[0ex][0ex]{\ensuremath{\hookleftarrow}},
+		frame=single,
+		showtabs=false,
+		showspaces=false,
+		showstringspaces=false,
+		identifierstyle=\ttfamily,
+		keywordstyle=\color[rgb]{0,0,1},
+		commentstyle=\color[rgb]{0.133,0.545,0.133},
+		stringstyle=\color[rgb]{0.627,0.126,0.941},
+}
+
+
+\newcommand{\rb}[1]{{\color{red}{\it RB: #1}}}
+\newcommand{\dz}[1]{{\color{blue}{\it DZ: #1}}}
+\newcommand{\dm}[1]{{\color{green}{\it DM: #1}}}
+\newcommand{\hl}[1]{{\color{orange}{#1}}}
+
+\newlength{\saveparindent}
+\setlength{\saveparindent}{\parindent}
+\newlength{\saveparskip}
+\setlength{\saveparskip}{\parskip}
+
+\newenvironment{newenumerate}{%
+\begin{list}{({\rm \arabic{ctr}})\hfill}{\usecounter{ctr}\labelwidth=17pt%
+\labelsep=6pt \leftmargin=23pt \topsep=.5pt%
+\setlength{\listparindent}{\saveparindent}%
+\setlength{\parsep}{\saveparskip}%
+\setlength{\itemsep}{5pt} }}{\end{list}}
+
+\newenvironment{newitemize}{%
+\begin{list}{\hspace{3pt}$\bullet$\hfill}{\labelwidth=12pt%
+\labelsep=3pt \leftmargin=15pt \topsep=1pt%
+\setlength{\listparindent}{\saveparindent}%
+\setlength{\parsep}{\saveparskip}%
+\setlength{\itemsep}{1pt}}}{\end{list}}
+
+\begin{document}
+
+%don't want date printed
+\date{}
+
+%make title bold and 14 pt font (Latex default is non-bold, 16 pt)
+\title{An SSD-based eigensolver for spectral analysis on billion-node graphs}
+
+%for single author (just remove % characters)
+%\author{
+%{\rm Da Zheng, Randal Burns}\\
+%Department of Computer Science \\
+%Johns Hopkins University
+%\and
+%{\rm Joshua Vogelstein}\\
+%Institute for Computational Medicine \\
+%Department of Biomedical Engineering \\
+%Johns Hopkins University
+% copy the following lines to add more authors
+%\and
+%{\rm Alexander S. Szalay}\\
+%Department of Physics and Astronomy \\
+%Johns Hopkins University
+%} % end author
+
+\maketitle
+
+% Use the following at camera-ready time to suppress page numbers.
+% Comment it out when you first submit the paper for review.
+\thispagestyle{empty}
+
+
+\subsection*{Abstract}
+Many eigensolvers such as ARPACK and Anasazi have been developed to
+compute eigenvalues of a large sparse matrix. Typically, these
+eigensolvers run in RAM of a single machine for a relatively smaller
+eigenvalue problem or in the distributed memory for a larger problem.
+
+In contrast, we develop an SSD-based eigensolver framework called
+FlashEigen, which extends the Anasazi eigensolvers to SSDs, to compute
+eigenvalues of a graph with hundreds of millions or even billions of
+vertices in a single machine. In these SSD-based eigensolvers, we
+perform sparse matrix dense matrix multiplication (SpMM) in a
+semi-external memory fashion, i.e., we keep the sparse matrix on SSDs
+and the input dense matrix in memory. We specifically optimize the
+SpMM implementation for many real-world graphs that have nearly random
+vertex connection and power-law distribution in vertex degree. Due to
+the sparsity of the real-world graphs, the eigensolvers require large
+storage space for the vector subspace. We store the entire
+vector subspace on SSDs and reduce I/O to improve performance through
+lazy evaluation and caching the most recent dense matrix.
+
+Out result shows that FlashEigen is able to achieve 30\%-50\% performance
+of its in-memory implementation and the original KrylovSchur in the Anasazi
+framework on a machine with 48 CPU cores while it is able to scale to graphs
+with billions of vertices and compute hundreds of eigenvalues at this scale.
+Furthermore, it is
+capable of scaling to a graph with 3.4 billion vertices and 129 billion edges.
+It takes xxx hours to compute xxx singular values of the billion-node direct graph
+and use xxx GB memory.
+
+\section{Introduction}
+\input{intro}
+
+\section{Related Work}
+\input{relwork}
+
+\input{design}
+
+\input{eval}
+
+\section{Conclusions}
+\input{conclusion}
+
+\section{Acknowledgments}
+
+
+{\footnotesize \bibliographystyle{acm}
+\bibliography{eigensolver}  % sigproc.bib is the name of the Bibliography in this case
+
+
+%\theendnotes
+
+\end{document}

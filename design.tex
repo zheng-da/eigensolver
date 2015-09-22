@@ -41,6 +41,75 @@ the subspace and reorthogonalization to fix float-point rounding errors.
 A block extenion of an eigensolver updates multiple vectors in the subspace
 in a single step, which leads to sparse matrix dense matrix multiplication.
 
+\subsection{The architecture of FlashEigen}
+
+We build FlashEigen on top of SAFS, a user-space filesystem, to fully utilize
+the I/O throughput of a large SSD array. The architecture of FlashEigen is shown
+in Figure \ref{arch}. FlashEigen stores data of sparse matrices and dense matrices
+in SAFS and implements matrix operations required by the Anasazi eigensolvers.
+As such, the Anasazi eigensolvers can access data from SSDs.
+
+\begin{figure}
+\centering
+\includegraphics[scale=0.4]{./architecture.pdf}
+\vspace{-5pt}
+\caption{The architecture of FlashEigen.}
+\vspace{-5pt}
+\label{arch}
+\end{figure}
+
+\subsection{SAFS}
+
+SAFS \cite{safs} is a user-space filesystem for a high-speed SSD array in
+a NUMA machine. It is implemented as a library and runs in the address space
+of its application. It is deployed on top of the Linux native filesystem.
+SAFS was originally designed for optimizing small I/O accesses. However,
+sparse matrix dense matrix multiplication and dense matrix operations
+generates much fewer but much larger I/O. Therefore, we provide additional
+optimizations to maximize sequential I/O throughput from a large SSD array.
+
+The original SAFS has a dedicated I/O thread for each SSD and application threads
+have to send I/O requests to one of the I/O threads when accessing data from SSDs.
+As such, an I/O thread accesses an SSD exclusively. This strategy avoids lock
+contention in the Linux kernel, but potentially increases the number of thread
+context switches for I/O access. The cost of a context switch is amortized by
+having applications to issue many I/O requests.
+
+The latency of a thread context switch becomes noticeable on a high-speed SSD
+array under a sequential I/O workload and it becomes critical to avoid thread
+context switch to gain I/O performance. Under such a workload, each I/O thread
+gets much fewer parallel I/O requests from an application and each I/O completion
+may suffer from the latency of a context switch.
+Therefore, instead of having an I/O thread for each SSD \cite{safs}, we
+use only a single I/O thread for each NUMA node, which is responsible for
+all of the SSDs connected to the NUMA node. As such, an I/O thread processes
+many more I/O requests to amortize the latency of a context switch.
+Similarly, if the computation in application threads did not saturate CPU,
+SAFS would put the application threads into sleep while they were waiting
+for I/O. This results in many thread context switches and, thus, both CPU and
+SSDs were under utilization. To saturate I/O, an application thread continues
+issuing asynchronous I/O. However, instead of getting notified of I/O completion,
+application threads poll for I/O to avoid thread context switches when they
+complete all computation available to it.
+
+To better support access to many relatively small files simultaneously,
+SAFS stripes data in a file across SSDs with a different
+striping order for each file to store data evenly across SSDs and improve
+I/O utialization. Due to the sequential I/O workload from FlashEigen,
+we stripe data across SSDs with a large block size, in the order of multiple
+megabytes, to increase I/O throughput and potentially reduce write amplification
+on SSDs \cite{}. Such a large block size may cause storage skew on a large SSD
+array if every file stripes data in the same order.
+The same striping order may also cause more I/O accesses to hit some of the SSDs
+and saturate them while other SSDs are under utilization. Therefore, whenever
+a new file is created, SAFS generates a random striping order for the file to
+evenly distribute I/O among SSDs. SAFS stores the striping order with the file
+for future data retrieval from the file.
+
+\dz{fair I/O scheduling}
+
+\dz{use a large I/O blocks in the kernel}
+
 \subsection{Sparse matrix multiplication} \label{spmm}
 Sparse matrix multiplication is a computationally expensive
 operation in an eigensolver due to random memory access. Sparse matrix vector
@@ -230,6 +299,8 @@ stores vectors on SSDs.
 FlashEigen stores multiple vectors of the subspace in a dense matrix physically.
 One reason is that the Anasazi eigensolvers update multiple vectors of the subspace
 in an iteration due to the block extension of the eigenvalue algorithms.
+The number of vectors stored in a matrix is determined by the block size of
+a block eigensolver.
 This design also helps garbage collection in lazy evaluation (section \ref{sec:lazy_eval}).
 As such, the subspace is composed of tall-and-skinny dense matrices.
 However, the eigensolvers still need to access individual vectors,
@@ -258,6 +329,8 @@ so we organize the elements in the dense matrices in column-major order.
 			\hline
 			op8 & $AA[,idxs] \leftarrow BB$ & yes \\
 			\hline
+			op9 & $AA \leftarrow conv\_layout(BB)$ & yes \\
+			\hline
 		\end{tabular}
 		\normalsize
 	\end{center}
@@ -267,10 +340,22 @@ so we organize the elements in the dense matrices in column-major order.
 	\label{anasazi_ops}
 \end{table}
 
-The Anasazi eigensolvers require the dense matrix operations shown in Table
-\ref{anasazi_ops}.
-The Anasazi eigensolvers allow users to implement the tall-and-skinny matrices
-and their operations.
+The Anasazi eigensolvers allow users to implement
+the tall-and-skinny matrices and their operations. Such flexibility allows us to
+store dense matrices on SSDs or even physically not store a dense matrix.
+
+FlashEigen require a set of dense matrix operations shown in Table
+\ref{anasazi_ops}. $op1-8$ are the operations required by the original Anasazi
+eigensolvers. The most computationally expensive operations are the two
+matrix multiplication operations: $op1$ and $op3$, mainly used for
+reorthogonalization to fix float-point rounding errors.
+$op7$ and $op8$ access individual columns of a dense matrix.
+Therefore, we store the dense matrices in column major by default.
+However, the sparse matrix dense matrix multiplication described in section
+\ref{spmm} requires a row-major dense matrix to increase data locality.
+Thus, FlashEigen adds another operation $op9$ to convert data layout
+in dense matrices, which converts a column-major matrix to a row-major
+matrix when it is passed to the SpMM operation.
 
 It is challenging to achieve the performance of external-memory dense matrix
 operations comparable to their in-memory counterparts. Unlike sparse matrix
@@ -383,183 +468,105 @@ are large and are stored on SSDs. To minimize I/O, we perform operations on
 each group together to share I/O for accessing the tall-and-skinny matrix
 on the right.
 
-We stripe data in a matrix across SSDs with a different striping order for each
-dense matrix
-to store data evenly across SSDs and improve I/O utialization for matrix operations
-that involve in many matrices. There are two reasons for using different striping
-orders among dense matrices.
-We stripe data across SSDs with a large block size, in the order of multiple
-megabytes, to increase I/O throughput and potentially reduce write amplification
-on SSDs \cite{}. Such a large block size may cause storage skew on a large SSD
-array if every dense matrix stripes data across SSDs in the same order.
-Furthermore, $op1$ and $op3$ may involve in many dense matrices, as shown above.
-The same striping order may cause more I/O accesses to hit some of the SSDs
-and saturate them while other SSDs are under utilization. Therefore,
-whenever we create a dense matrix, we generate a random striping order and store
-the striping order with the matrix to retrieve data from the matrix correctly.
-
 %\dz{This approach actually can change the computation complexity of dense matrix
 %multiplication. I need to measure its impact on in-memory dense matrix
 %multiplication.}
 
 \subsubsection{Lazy evaluation} \label{sec:lazy_eval}
-The Anasazi eigensolvers allows users to store the tall dense matrices and
-implement the operations on the matrices themselves. Such flexibility allows
-us to evaluate the dense matrix operations lazily \cite{Ching12} to avoid
-materializing
-every dense matrix, which reduces the amount of data read and written to SSDs.
-
-Due to lazy evaluation, vectors in the subspace is immutable, so each operation
-generates new vectors. Therefore, we group the vectors in the subspace into
-dense matrices. The vectors in a dense matrix are updated together in the block
-eigensolver. The number of vectors in a matrix is determined by the block
-size of a block eigensolver. Once a dense matrix does not contain any vectors
-referenced by the eigensolver, the dense matrix is garbage collected.
-
-\begin{table}
-	\begin{center}
-		\small
-		\begin{tabular}{|c|c|c|c|c|}
-			\hline
-			& operation & customized output \\
-			\hline
-			op9 & $AA \leftarrow conv\_layout(BB)$ & yes \\
-			\hline
-			op10 & $AA \leftarrow merge(BB, CC, ...)$ & yes \\
-			\hline
-			op11 & $[BB, CC, ...] \leftarrow split(AA)$ & yes \\
-			\hline
-		\end{tabular}
-		\normalsize
-	\end{center}
-	\caption{Additional dense matrix operations required by FlashEigen.
-		$XX$ represents a tall dense matrix.}
-	\label{add_ops}
-\end{table}
-
-FlashEigen requires some additional operations to convert data layout
-in dense matrices, as shown in Figure \ref{add_ops}.
-We need an operator $conv\_layout(AA)$ to convert data layout
-in the dense matrices. The eigensolvers require to access individual columns
-of the tall matrices, so these dense matrices are stored in column major
-to access them efficiently. However,
-the sparse matrix dense matrix multiplication described in section \ref{spmm}
-requires the dense matrix stored in row major to increase data locality.
-Therefore, we store the dense matrices in column major by default. Only
-when the dense matrices are passed to SpMM, they are converted to row major.
-
+Lazy evaluation avoids materializing every dense matrix to reduce the amount
+of data read and written to SSDs.
 To enable lazy evaluation, we define a special matrix to represent the output
-matrix from a matrix operation. Such a matrix does not store the data of
-an operation result. Instead, it stores the computation and the reference to
-the input matrices. We refer to these dense matrices as \textit{virtual matrices}.
-Most matrix operations in Table \ref{ops} output \textit{virtual matrices},
-as long as the output matrices are tall dense matrices. Only \textit{op3}
-and \textit{op6} cannot be virtualized because they output small matrices and
-small vectors.
+of a matrix operation. Such a matrix does not store the data of
+an operation result. Instead, it stores the computation and a reference to
+the input matrices. We refer to these special matrices as \textit{virtual matrices}.
+Most matrix operations in Table \ref{anasazi_ops} output \textit{virtual matrices},
+as long as the output matrices are tall-and-skinny matrices. Only \textit{op3}
+and \textit{op6} cannot be evaluated lazily because they output small matrices
+and small vectors and the output of these two operations is stored in Anasazi's
+native matrices and vectors.
 
-With \textit{virtual matrices}, we construct a directed acyclic graph (DAG)
-at runtime to represent computation in the eigensolvers. In the DAG, we store
-all scalar variables and small matrices as part of computation.
-Figure \ref{comp_seq} shows an example of a sequence of dense matrix operations
-performed in the eigensolvers. Figure
-\ref{dag} visualizes the sequence of computation, which forms a directed acyclic
-graph (DAG). Inside this DAG, we do not need to perform any computation other
-than the last one.
+%With \textit{virtual matrices}, we construct a directed acyclic graph (DAG)
+%at runtime to represent computation in FlashEigen. In the DAG, we store
+%all scalar variables and small matrices as part of computation.
+%Figure \ref{comp_seq} shows an example of a sequence of dense matrix operations
+%performed in FlashEigen. Figure
+%\ref{dag} visualizes the sequence of computation, which forms a directed acyclic
+%graph (DAG). Inside this DAG, we do not need to perform any computation other
+%than the last one.
 
-All matrices in the DAG need to be immutable so that \textit{virtual matrices}
-can generate the same result any time when they are materialized. However,
-the Anasazi eigensolvers originally reuse the existing matrices to store
-the results of matrix operations as shown in Figure \ref{comp_seq}. Therefore,
-our implementation of the matrix operations always generates new matrices and
-the \textit{Anasazi matrices} only store pointers to matrix data. This approach
-is equivalent to renaming variables used by compilers.
+All matrices in FlashEigen are immutable so that \textit{virtual matrices}
+can generate the same result every time when they are materialized. Therefore,
+our implementation of the matrix operations always generates new matrices.
+The original Anasazi eigensolvers require in-place update on the existing dense
+matrices, so FlashEigen only passes a pointer to a dense matrix to the Anasazi
+eigensolvers instead of the matrix data. This approach is equivalent to variable
+renaming used by compilers.
+A dense matrix is garbage collected only when there are not any references to
+the matrix.
 
-\textit{op7} and \textit{op8} access individual columns and have to be incorporated
-with the lazy evaluation. The eigensolvers usually access only one column at a time
-from a dense matrix. When accessing a single column, we materialize the virtual
-matrix in column major if the underlying matrix is a \textit{virtual matrix}.
-Because all matrices are immutable, setting a column in a matrix needs to
-copy the original matrix and set the particular column. Instead of physically
-generating the matrix, we create a virtual matrix that merge the original matrix
-with the column.
+%\textit{op7} and \textit{op8} access individual columns and have to be incorporated
+%with the lazy evaluation. The eigensolvers usually access only one column at a time
+%from a dense matrix. When accessing a single column, we materialize the virtual
+%matrix in column major if the underlying matrix is a \textit{virtual matrix}.
+%Because all matrices are immutable, setting a column in a matrix needs to
+%copy the original matrix and set the particular column. Instead of physically
+%generating the matrix, we create a virtual matrix that merge the original matrix
+%with the column.
 
-\begin{figure}
-\begin{minted}[mathescape,
-		fontsize=\scriptsize,
-		frame=single,
-]{r}
-# MV0, MV1, MV2, MV3, MV4 are tall dense matrices.
-# B1, B2, B3, B4 are small dense matrices.
-# MV1 is the result of sparse matrix dense matrix
-# multiplication.
-MV0 <- rand_init
-MV1 <- SpMM
-MV2 <- 1 * MV0 * B1 + 0 * MV2
-MV2 <- 1 * MV2 * B2 + 0 * MV2
-MV3 <- 1 * MV1 * B3 + 0 * MV1
-MV1 <- -1 * MV2 * B4 + MV3
-MV4 <- MV1 * diag(vec)
-B <- t(MV4) * MV4
-\end{minted}
-\vspace{-5pt}
-\caption{A small sequence of dense matrix operations typically performed by
-the Anasazi eigensolvers.}
-\label{comp_seq}
-\end{figure}
+%\begin{figure}
+%\begin{minted}[mathescape,
+%		fontsize=\scriptsize,
+%		frame=single,
+%]{r}
+%# MV0, MV1, MV2, MV3, MV4 are tall dense matrices.
+%# B1, B2, B3, B4 are small dense matrices.
+%# MV1 is the result of sparse matrix dense matrix
+%# multiplication.
+%MV0 <- rand_init
+%MV1 <- SpMM
+%MV2 <- 1 * MV0 * B1 + 0 * MV2
+%MV2 <- 1 * MV2 * B2 + 0 * MV2
+%MV3 <- 1 * MV1 * B3 + 0 * MV1
+%MV1 <- -1 * MV2 * B4 + MV3
+%MV4 <- MV1 * diag(vec)
+%B <- t(MV4) * MV4
+%\end{minted}
+%\vspace{-5pt}
+%\caption{A small sequence of dense matrix operations typically performed by
+%the Anasazi eigensolvers.}
+%\label{comp_seq}
+%\end{figure}
 
-\begin{figure}
-\centering
-\includegraphics[scale=0.5]{./dag.pdf}
-\vspace{-5pt}
-\caption{A directed acyclic graph represents the sequence of matrix operations
-shown in Figure \ref{comp_seq}. Each rounded rectangular node indicates
-a virtual matrix and each rectangular node indicates a materialized matrix.}
-\vspace{-5pt}
-\label{dag}
-\end{figure}
+%\begin{figure}
+%\centering
+%\includegraphics[scale=0.5]{./dag.pdf}
+%\vspace{-5pt}
+%\caption{A directed acyclic graph represents the sequence of matrix operations
+%shown in Figure \ref{comp_seq}. Each rounded rectangular node indicates
+%a virtual matrix and each rectangular node indicates a materialized matrix.}
+%\vspace{-5pt}
+%\label{dag}
+%\end{figure}
 
-%vmat-7 = 1 * mem_mat-0(4039,4) * mem_mat-6(4,4)
-%vmat-22 = 1 * vmat-7 * mem_mat-21(4,4)
-%vmat-24 = 1 * mem_mat-10(4039,4) * mem_mat-23(4,4)
-%vmat-26 = -1 * vmat-22 * mem_mat-25(4,4) + 1 * vmat-24
-%vmat-29 = vmat-26* vec
-%vmat-29(vmat-26(-1 * vmat-22(1 * vmat-7(1 * mem_mat-0(4039,4) * mem_mat-6(4,4)) * mem_mat-21(4,4)) * mem_mat-25(4,4) + 1 * vmat-24(1 * mem_mat-10(4039,4) * mem_mat-23(4,4)))* vec)
+To perform actual computation, FlashEigen needs to materialize
+\textit{virtual matrices} in the two cases. FlashEigen materializes
+a \textit{virtual matrix} when encountering \textit{op3} and \textit{op6}
+because these two operations output Anasazi's native matrices and vectors.
+Each \textit{virtual matrix} represent some computation on some materialized
+tall-and-skinny matrices that are stored on SSDs. FlashEigen materializes
+a \textit{virtual matrix}, which has more than one materialized input matrix,
+to minimize the amount of data read from SSDs.
+%FlashEigen also materializes all of the dense matrices in the basis.
 
-\subsubsection{Materialize \textit{virtual matrices}}
-The eigensolvers need to materialize \textit{virtual matrices} whenever
-encountering \textit{op3} and \textit{op6} because the output of these two
-operations is stored in Anasazi's native matrices and vectors. If the input
-matrices of the operations are virtual matrices, we have to materialize them
-first. This triggers matrix materialization recursively until we reach
-the matrices that have been materialized. When materializing
-a \textit{virtual matrix}, we materialize partitions of a matrix separately.
+A \textit{virtual matrix} may contain a sequence of operations, so materializing
+it may trigger matrix materialization recursively.
 We discard the materialized partition of a matrix, once it is no longer needed,
-to reduce the amount of data written to SSDs at the cost of extra computation.
-
-We partition the virtual matrices horizontally in the same fashion as
-the external-memory matrices, so that we can materialize each partion of
-a virtual matrix independantly. 
-When we materialize a partition of a matrix within a group of matrix
-operations, we use a much smaller partition size than the external-memory
-matrix to increase CPU cache hits. As such, we only need to read the input
-matrix to CPU cache and the output of an operation is still in the CPU cache
-when it is fed to the next operation as input.
-
-As computation proceeds, the DAG grows and eventually becomes a very large graph.
-In this large DAG, we would have to keep all materialized dense matrices on SSDs
-and each matrix operation would involve in many dense matrices. Therefore, it
-becomes prohibitively expensive in terms of space usage, computation and I/O
-access if we do not trim the DAG. To trim the DAG, we materialize some of
-the virtual matrices in the DAG. The current criteria is to materialize a virtual
-matrix if the matrix depends on a certain number of materialized matrices.
-We vary the threshold to trade off the amount of data read from SSDs and written
-to SSDs. When the threshold is smaller, we only need to maintain a smaller DAG
-in the cost of materializing more dense matrices on SSDs. By default, the number
-is two. \dz{we should perform experiments to justify the default number.}
-
-We materialize a matrix if it relies on more than two materialized matrices.
-We also make sure all dense matrices in the basis are materialized.
-\dz{It seems that we can save some multiplication. Why?}
+to avoid writing data of a intermediate \textit{virtual matrix} to SSDs.
+We partition a \textit{virtual matrix} horizontally in the same fashion as
+the external-memory matrices and materialize each partation independantly. 
+To increase CPU cache hits, we use a much smaller partition size than
+the external-memory matrix. As such, the output of the previous operation is
+still in the CPU cache when it is fed to the next operation.
 
 \subsubsection{Data and computation sharing in the DAG}
 When materializing matrices in the DAG, we materialize them recursively.

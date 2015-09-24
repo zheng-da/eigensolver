@@ -235,11 +235,11 @@ multiplication. The NUMA architecture is commonly used in today's multi-processo
 servers, where each processor connects to its own memory banks. It is essential
 to fully utilize the bandwidth of memory and inter-processor links to achieve
 performance. As shown in Figure \ref{dense_mat} (a), we assign multiple
-contiguous rows to a partition and assign multiple partitions to the same
-NUMA node. A partition always has $2^i$ rows for efficiently locating a row
-with bit operations. The partition size is also multiple of the tile size of
+contiguous rows in a row interval to a partition, which is assigned to a NUMA
+node. A row interval always has $2^i$ rows for efficiently locating a row
+with bit operations. The row interval size is also multiple of the tile size of
 a sparse matrix so that multiplication on a tile only needs to access rows
-from a single partition.
+from a single row interval.
 
 \begin{figure}
 \centering
@@ -249,13 +249,13 @@ from a single partition.
 dense matrix is partitioned horizontally into many row intervals.
 (a) For an in-memory matrix, row intervals are stored across NUMA nodes and
 elements are stored in row-major order; (b) for an SSD-based matrix, elements
-inside a partition are stored in column-major order.}
+inside a row interval are stored in column-major order.}
 \vspace{-5pt}
 \label{dense_mat}
 \end{figure}
 
 \subsubsection{Execution of sparse matrix multiplication} \label{sec:exec}
-We perform sparse matrix dense matrix multiplication in semi-external memory.
+We perform sparse matrix dense matrix multiplication in semi-external memory
 and optimize it for different numbers of columns in the dense matrices.
 
 We partition a sparse matrix horizontally for parallelization and assign multiple
@@ -306,7 +306,7 @@ increases with the number of required eigenvalues. Furthermore, a larger
 number of vectors in the subspace improves the convergence rate of an eigensolver. 
 It is often that an eigensolver needs multiple terabytes to store the vectors
 in the subspace for eigenvalue problems at such a scale. Therefore, FlashEigen
-stores vectors on SSDs.
+stores these vectors on SSDs.
 
 FlashEigen stores multiple vectors of the subspace in a dense matrix physically.
 One reason is that the Anasazi eigensolvers update multiple vectors of the subspace
@@ -314,7 +314,7 @@ in an iteration due to the block extension of the eigenvalue algorithms.
 The number of vectors stored in a matrix is determined by the block size of
 a block eigensolver.
 This design also helps garbage collection in lazy evaluation (section \ref{sec:lazy_eval}).
-As such, the subspace is composed of tall-and-skinny dense matrices.
+As such, the subspace is composed of multiple tall-and-skinny dense matrices.
 However, the eigensolvers still need to access individual vectors,
 so we organize the elements in the dense matrices in column-major order. 
 
@@ -354,15 +354,15 @@ so we organize the elements in the dense matrices in column-major order.
 
 The Anasazi eigensolvers allow users to implement
 the tall-and-skinny matrices and their operations. Such flexibility allows us to
-store dense matrices on SSDs or even physically not store a dense matrix.
+store these large dense matrices on SSDs or even not physically store them.
 
-FlashEigen require a set of dense matrix operations shown in Table
+FlashEigen requires a set of dense matrix operations shown in Table
 \ref{anasazi_ops}. $op1-8$ are the operations required by the original Anasazi
 eigensolvers. The most computationally expensive operations are the two
 matrix multiplication operations: $op1$ and $op3$, mainly used for
-reorthogonalization to fix float-point rounding errors.
-$op7$ and $op8$ access individual columns of a dense matrix.
-Therefore, we store the dense matrices in column major by default.
+reorthogonalization to fix float-point rounding errors. The eigensolvers
+use $op7$ and $op8$ to access individual columns of a dense matrix,
+so we store the dense matrices in column major by default.
 However, the sparse matrix dense matrix multiplication described in section
 \ref{spmm} requires a row-major dense matrix to increase data locality.
 Thus, FlashEigen adds another operation $op9$ to convert data layout
@@ -371,10 +371,9 @@ matrix when it is passed to the SpMM operation.
 
 It is challenging to achieve the performance of external-memory dense matrix
 operations comparable to their in-memory counterparts. Unlike sparse matrix
-multiplication, these dense matrix operations are less \dz{computationally
-expensive}. Even though SSDs are fast, their sequential I/O performance is
-still an order of magnitude slower than RAM. Therefore, dense matrix operations
-on SSDs are significantly slower than the ones in RAM (Figure \ref{perf:mat_ops}).
+multiplication, these dense matrix operations are less computationally
+intensive. Even though SSDs are fast, their sequential I/O performance is
+still an order of magnitude slower than RAM.
 Furthermore, SSDs wears out after a certain amount of write \cite{}.
 Even enterprise SSDs \cite{} only allows a small number of DWPD
 (diskful writes per day). Therefore, FlashEigen optimizes dense matrix operations
@@ -402,8 +401,8 @@ an external-memory matrix is divided into multiple row intervals and data
 in a row interval is stored contiguously. Unlike a NUMA dense matrix, elements
 in a row interval of an external-memory dense matrix are stored in column-major order
 for easily accessing individual columns. The size of a row interval is chosen
-according to the number of columns in the matrix to generate large I/O requests
-of multiple megabytes.
+according to the number of columns in the matrix to generate large I/O requests,
+in the order of megabytes.
 
 Once data in a partition is loaded to memory, we further partition it to
 smaller row intervals so that data
@@ -419,13 +418,14 @@ matrices in an operation to the same thread for parallel processing.
 Majority of the operations in Table \ref{anasazi_ops} output tall-and-skinny
 matricies whose rows only depend on the same rows from the input matrices.
 For these operations, the computation and data access to the tall-and-skinny
-matrices are completely independant between row intervals. 
-In contrast, $op3$ outputs a small matrix, but this operation can be split into
+matrices are completely independant between row intervals. One of the exceptions is
+$op3$, which outputs a small matrix. However, this operation can be split into
 two sub-operations: the first one performs computation on data in the same row
 interval from all of the input matrices and output a small matrix and the computation
 is completely independant between row intervals; the second one sums all of
 the small matrices and outputs a single small matrix. The first sub-operation
-has most of computation in $op3$ and requires external-memory data access.
+has most of computation in $op3$ and requires external-memory data access,
+so we parallelize it in the same fashion as other operations.
 %This is illustrated in Figure \ref{fig:mat_par}.
 $op6$ can be evaluated in a similar fashion to $op3$. Therefore, all matrix
 operations in Table \ref{anasazi_ops} can be parallelized in the same fashion.
@@ -450,11 +450,11 @@ stored on SSDs and X indicates a small matrix stored in memory.}
 The Anasazi eigensolvers frequently perform a matrix operation on many
 tall-and-skinny matrices and the number of the matrices varies in each iteration.
 The number of matrices can be as large as multiple hundred when an eigensolver
-computes hundreds of eigenvalues.
-Such an operation includes $op1$ and $op3$. If a thread has to read the data
-in a row interval from all of the matrices, the amount of data in memory
-can be very large and reading part of a partition results in many small reads
-and writes to SSDs because the matrices are organized in column-major order.
+computes hundreds of eigenvalues. $op1$ and $op3$ are such operations.
+If a thread has to read the data in a row interval from all of the matrices,
+the amount of data in memory is still very large. The other choice is to read
+only part of a partition, which results in many small reads and writes to SSDs,
+because the matrices are organized in column-major order.
 
 Instead, we break a large group of tall-and-skinny matrices into multiple small
 groups to reduce
@@ -467,8 +467,8 @@ operation on all intermediate matrices to generate the final result.
 Materializing these
 intermediate matrices would result in large memory consumption if we store them
 in memory or large amount of I/O if we store them on SSDs. Instead, we leverage
-the lazy evaluation in Section \ref{sec:lazy_eval}, i.e., we only materialize
-part of them at a time and pass the materialized part to the addition operation
+the lazy evaluation in Section \ref{sec:lazy_eval}, which only materializes
+part of them at a time and passes the materialized part to the addition operation
 to generate the final result.
 
 For $op3$, an eigensolver usually transopses a group of tall-and-skinny matrices
@@ -478,7 +478,7 @@ group shares the same tall-and-skinny matrix on the right. Each group generates
 a small matrix that can be kept in memory. In this case, all input matrices
 are large and are stored on SSDs. To minimize I/O, we perform operations on
 each group together to share I/O for accessing the tall-and-skinny matrix
-on the right.
+in the right operand.
 
 %\dz{This approach actually can change the computation complexity of dense matrix
 %multiplication. I need to measure its impact on in-memory dense matrix

@@ -1,53 +1,144 @@
 \section{Experimental Evaluation}
 
-We use a very large SAFS RAID block size. We should mention the sequential I/O performance
-of the SSD array.
+We evaluate the performance of the SSD-based FlashEigen against multiple
+in-memory implementations including the original Anasazi eigensolvers.
+We first evaluate the performance
+of the two most computationally intensive computation in the eigensolvers:
+sparse matrix dense matrix multiplication and dense matrix multiplication.
+They together account for most of the running time of eigendecomposition.
+We demonstrate the effectiveness of each optimization on the two operations.
+Then we compare the performance of our external-memory implementation with
+multiple in-memory implementations: \textit{(i)} our in-memory implementations,
+\textit{(ii)} MKL and \textit{(iii)} the Trilinos implementations. We then
+evaluate the overall
+performance of FlashEigen and compare with the original Anasazi eigensolvers
+in both shared memory and shared memory. We further demonstrate the scalability
+of FlashEigen on a web graph of 3.4 billion vertices and 129 billion edges.
 
-\subsection{Matrix multiplication}
+We conduct all experiments on a non-uniform memory architecture machine with
+four Intel Xeon E7-4860 processors, clocked at 2.6 GHz, and 1TB memory of
+DDR3-1600. Each processor has 12 cores. The machine has three LSI SAS 9300-8e
+host bus adapters (HBA) connected to a SuperMicro storage chassis, in which
+24 OCZ Intrepid 3000 SSDs are installed. The 24 SSDs together deliver
+approximately XXX GB/s for read and XXX GB/s for write. The machine runs
+Linux kernel v3.13.0. We use 48 threads for most of experiments by default.
 
-Matrix multiplication is the most important operation in an eigensolver.
-Both sparse matrix multiplication and dense matrix multiplication together
-account for most of the computation.
+\begin{table}
+\begin{center}
+\footnotesize
+\begin{tabular}{|c|c|c|c|c|}
+\hline
+Graph datasets & \# Vertices & \# Edges & Directed \\
+\hline
+Twitter \cite{twitter} & $42$M & $1.5$B & Yes \\
+\hline
+Friendster \cite{} & $65$M & $1.7$B & No \\
+\hline
+W \cite{} & $62$M & $12$B & No \\
+\hline
+Page \cite{web_graph} & $3.4$B & $129$B & Yes \\
+%\hline
+%RMAT graph \cite{rmat} & & & & \\
+\hline
+\end{tabular}
+\normalsize
+\end{center}
+\vspace{-10pt}
+\caption{Graph data sets. These are directed graphs and the diameter
+estimation ignores the edge direction.}
+\label{graphs}
+\end{table}
 
-\subsubsection{Sparse matrix dense matrix multiplication}
-This section evaluates the performance of the in-memory (mem), semi-external-memory
-(SEM) and external-memory (EM) version of SpMM in our eigensolvers. We compares
-their performance with that of Intel MKL implementation.
-We should vary the number of columns in the dense matrix to show that EM SpMM and SEM SpMM will
-eventually catch the performance of in-mem SpMM. Another point is that our SpMM outperforms
-Intel MKL.
+We use the real-world graphs in Table \ref{graphs} for evaluation. The largest
+graph is the page graph with 3.4 billion vertices and 129 billion edges.
+The smallest graph we use has 42 million vertices and 1.5 billion edges.
+W is a similarity graph generated from XXX. The degree of the vertices in
+this graph varies from X to XXX and does not follow the power-law distribution.
+The page graph is clustered by domain, generating good CPU cache hit rates
+in sparse matrix dense matrix multiplication.
 
-\dz{I should also plot a chart to show the effectiveness of each optimization
-in SpMM.}
+\subsection{Sparse matrix multiplication}
+This section evaluates the performance of the in-memory (IM) and
+semi-external-memory (SEM) implementations of SpMM in FlashEigen. We first
+evaluate the effectiveness of the optimizations on the IM-SpMM implementations.
+Then we compares its performance
+with that of the in-memory (IM) implementation, the Intel MKL implementation
+and the Trilinos implementation.
+
+We apply a set optimizations to the IM-SpMM implementation. To understand
+their effectiveness, we start with an implementation that performs sparse
+matrix multiplication on a sparse matrix in the CSR format and apply
+the optimizations incrementally in the following order:
+\begin{itemize} \itemsep1pt \parskip0pt \parsep0pt
+	\item partition dense matrices for NUMA (NUMA),
+	\item partition the sparse matrix in both dimension into tiles of
+		$16K \times 16K$ for cache blocking (Cache blocking),
+	\item organize multiple physical tiles into a super tile (Super tile),
+	\item use CPU vectorization instructions (Vec),
+	\item allocate a local buffer to store the intermediate result when
+		processing tile rows (Local write),
+	\item combine the SCSR and COO format to reduce the number of conditional
+		jump CPU instructions (SCSR+COO),
+\end{itemize}
+Figure \ref{perf:spmm_opt} shows that almost all of these optimizations have
+positive effect
+on the sparse matrix multiplication but the degree of effectiveness varies
+significantly between different graphs and different numbers of columns on
+the dense matrices. For example, the NUMA optimization is more effective when
+the dense matrices have more columns. Cache blocking is very effective when
+the dense matrices have fewer columns and it even has a little negative effect
+on the Friendster graph when the dense matrices have 16 columns. The reason is
+that the tile of $16K \times 16K$ is too large for the dense matrices with
+16 columns and the rows from the dense matrices can no longer be kept in
+the CPU cache during the multiplication on the tile. In the KrylovSchur
+eigensolver, we never use dense matrices with more than four columns in
+sparse matrix multiplication.
+
+\dz{We might want to show the effectiveness of load balancing as well.}
 
 \begin{figure}
 	\begin{center}
 		\footnotesize
 		\vspace{-15pt}
-		\include{spmm}
+		\include{SpMM_optimize}
 		\vspace{-15pt}
-		\caption{The performance of the in-memory, SEM and EM implementations
-			of SpMM in our eigensolvers on the Friendster graph. The performance
-			is normalized to the Intel MKL. \dz{measure the SEM performance.}}
+		\caption{The effectiveness of the SpMM optimizations on the Friendster
+			graph (F) and the Twitter graph (T) for different numbers of
+			columns in the dense matrices.}
+		\label{perf:spmm_opt}
+	\end{center}
+\end{figure}
+
+\dz{I should compare IM-SpMM and SEM-SpMM in more details, maybe on all
+sparse matrices.}
+to show that SEM SpMM will eventually catch the performance of in-mem SpMM. 
+
+We then evaluate the performance of the IM-SpMM and SEM-SpMM in FlashEigen
+and compare their performance with the MKL implementation and the Trilinos
+implementation (Figure \ref{perf:spmm}). We only show the performance of
+SpMM on the Friendster graph and the performance on the other graphs is very
+similar. The MKL and Trilinos SpMM cannot run on the page graph.
+IM-SpMM significantly outperforms both the MKL and Trilinos implementations.
+In the closest case, i.e., Trilinos with the one-column dense matrix,
+IM-SpMM outperforms Trilinos by 36\%. This suggests that the sparse matrix
+multiplication is optimized for SpMV. The MKL SpMM can perform well on
+the case that the dense matrices have more columns, but it cannot balance
+the load well on a power-law graph. \dz{How about on W?}
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{SpMM-Friendster}
+		\vspace{-15pt}
+		\caption{The runtime of in-memory SpMM (FE-IM) and SEM-SpMM (FE-SEM)
+			in the FlashEigen, the MKL and the Trilinos implementation on
+		the Friendster graph.}
 		\label{perf:spmm}
 	\end{center}
 \end{figure}
 
-One of the reason that MKL is slow is that MKL cannot balance the load well.
-
-\begin{figure}
-	\begin{center}
-		\footnotesize
-		\vspace{-15pt}
-		\include{spmm-pg}
-		\vspace{-15pt}
-		\caption{The performance of the in-memory, SEM and EM version of SpMM
-			in our eigensolvers on the page graph.}
-		\label{perf:spmm_pg}
-	\end{center}
-\end{figure}
-
-\subsubsection{Dense matrix multiplication}
+\subsection{Dense matrix multiplication}
 
 Figure \ref{perf:mat_mul} shows the relative performance of the in-memory
 and external memory version of dense matrix multiplication.
@@ -59,6 +150,12 @@ When the number of columns in the dense matrices increase, the performance
 gap gets smaller, which indicates that when computing more eigenpairs,
 the performance gap between in-memory and external-memory eigensolvers
 will be smaller.
+
+\dz{demonstrate that SAFS outperforms software RAID for sequential I/O access.}
+
+\dz{Individual optimizations on dense matrix multiplication.}
+\dz{demonstrate that storing vectors in multiple matrices outperforms storing
+them in a single matrix.}
 
 \begin{figure}
 	\begin{center}
@@ -75,22 +172,6 @@ will be smaller.
 	\end{center}
 \end{figure}
 
-\dz{Further optimize the in-memory dense matrix multiplication.}
-
-\subsection{Lazy evaluation}
-How effective are the optimizations for a group of dense matrix operations?
-
-In this section, we evaluate how aggressively we should materialize virtual
-matrices. What is the sweet spot that balance computation and I/O.
-
-We should plot a chart with multiple lines:
-in-mem version with all matrices materialized,
-in-mem version with matrices lazily evaluated,
-EM version with all matrices materialized,
-EM version with matrices lazily evaluated.
-
-In this chart, we only count the time used by dense matrix operations.
-
 \subsection{Compare EM eigensolvers with in-memory eigensolvers}
 We compare our EM eigensolvers with our in-mem eigensolvers as well as the original
 Anasazi eigensolvers. For the in-mem eigensolver, it should also have two versions.
@@ -105,26 +186,6 @@ If we implement dense matrix operations naively, a large column matrix helps to
 reduce the amount of data written to disks; if we avoid materializing a dense
 matrix every time we generate a dense matrix, a smaller column matrix potentially
 reduce the amount of data written to disks.
-
-\begin{table}
-	\begin{center}
-		\small
-		\begin{tabular}{|c|c|c|c|c|}
-			\hline
-			eigensolver & block size & the number of blocks \\
-			\hline
-			Krylov-Schur & 4 & \# eigenpairs \\
-			\hline
-			Davidson & \# eigenpairs & 8 \\
-			\hline
-			LOBPCG &  & N/A \\
-			\hline
-		\end{tabular}
-		\normalsize
-	\end{center}
-	\caption{}
-	\label{eigen_conf}
-\end{table}
 
 The block eigensolvers have two parameters that significantly affect
 the convergence rate. One is the block size, which determines the number
@@ -151,3 +212,11 @@ for the basis and thus has a faster convergance rate.
 
 We need to show how much read and write we save with lazy evaluation. We should
 also show how much multiplication the lazy evaluation causes.
+
+\dz{decompose the runtime of an eigensolver.}
+
+\subsubsection{Performance, I/O vs. the number of cached matrices}
+
+\subsubsection{External memory vs. distributed memory}
+
+\subsubsection{FlashEigen on the page graph}

@@ -44,8 +44,7 @@ Page \cite{web_graph} & $3.4$B & $129$B & Yes \\
 \normalsize
 \end{center}
 \vspace{-10pt}
-\caption{Graph data sets. These are directed graphs and the diameter
-estimation ignores the edge direction.}
+\caption{Graph data sets.}
 \label{graphs}
 \end{table}
 
@@ -140,20 +139,39 @@ the load well on a power-law graph. \dz{How about on W?}
 
 \subsection{Dense matrix multiplication}
 
-Figure \ref{perf:mat_mul} shows the relative performance of the in-memory
-and external memory version of dense matrix multiplication.
-There is a large gap between in-memory and external-memory implementation.
-The SSDs are the bottleneck. This is not surprising because the sequential
-I/O performance of SSDs is an order of magnitude smaller than RAM.
-However, this indicates that we can use the extra computation to save I/O.
-When the number of columns in the dense matrices increase, the performance
-gap gets smaller, which indicates that when computing more eigenpairs,
-the performance gap between in-memory and external-memory eigensolvers
-will be smaller.
+We evaluate the performance of dense matrix multiplication, which is the other
+most computationally intensive operation in the eigensolvers. We compare our
+in-memory and external-memory matrix multiplication with the MKL and Trilinos
+implementations.
+
+In eigendecomposition, there are two forms of dense matrix multiplication.
+The first form, shown by $op1$ in Table \ref{anasazi_ops}, multiplies
+a tall-and-skinny dense matrix of $n \times m$
+with a small dense matrix of $m \times b$ and output a tall-and-skinny dense
+matrix of $n \times b$, where $n$ is the size of the eigenvalue problem,
+$m$ is the number of existing vectors in the subspace and $b$ is the block
+size of the eigensolver. The second form, shown by $op3$, multiplies
+a transpose of a tall-and-skinny dense matrix
+of $n \times m$ with another tall-and-skinny dense matrix of $n \times b$
+and output a small matrix. $m$ varies from one block size to the total number
+of vectors in the subspace and is increased by one block size in the next
+iteration. In the experiments, we set $n$ to 60M, $b$ to 4 and vary $m$
+from $4$ to $512$. This setting of $b$ and $m$ is used in the experiments
+of our external-memory KrylovSchur eigensolver in the next section.
+
+Figure \ref{perf:gemm} and \ref{perf:mvtransmv} show the performance of
+the in-memory and external-memory dense matrix multiplication.
+The external-memory multiplication in FlashEigen is roughly 3-5 times slower
+than the in-memory implementation. In the dense matrix multiplication of
+the first form, the in-memory implementation outperforms MKL when the number
+of the vectors exceeds $128$ and MKL does not have a parallel implementation
+for the dense matrix multiplication of the second form. \dz{Show the performance
+of the Trilinos implementation.}
 
 \dz{demonstrate that SAFS outperforms software RAID for sequential I/O access.}
 
 \dz{Individual optimizations on dense matrix multiplication.}
+
 \dz{demonstrate that storing vectors in multiple matrices outperforms storing
 them in a single matrix.}
 
@@ -161,16 +179,48 @@ them in a single matrix.}
 	\begin{center}
 		\footnotesize
 		\vspace{-15pt}
-		\include{mat_mul}
+		\include{GEMM}
 		\vspace{-15pt}
-		\caption{The performance of in-memory and EM implementations of two types
-			of matrix multiplication: a tall matrix ($200M \times X$) times
-			a small matrix ($X \times X$) and a wide matrix ($X \times 200M$)
-			times a tall matrix ($200M \times X$). Their performance is
-		normalized by the corresponding Intel MKL implementations.}
-		\label{perf:mat_mul}
+		\caption{The runtime of dense matrix multiplication in $op1$. We compare
+			in-memory (FE-IM) and external-memory (FE-EM) implementations
+			in FlashEigen with the MKL and Trilinos implementations.}
+		\label{perf:gemm}
 	\end{center}
 \end{figure}
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{MvTransMv}
+		\vspace{-15pt}
+		\caption{The runtime of dense matrix multiplication in $op3$. We compare
+			in-memory (FE-IM) and external-memory (FE-EM) implementations
+			in FlashEigen with the Trilinos implementations.}
+		\label{perf:mvtransmv}
+	\end{center}
+\end{figure}
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{DMM-IO}
+		\vspace{-15pt}
+		\caption{The I/O throughput of the dense matrix multiplication
+		on the SSD array.}
+		\label{perf:dmm_io}
+	\end{center}
+\end{figure}
+
+The external-memory dense matrix multiplication has almost saturated
+the I/O bandwidth of the SSDs (Figure \ref{perf:dmm_io}). The average
+I/O throughput reaches 10.24GB/s from the entire SSD array or 437MB/s
+per SSD, close to the maximal I/O throughput of the SSDs.
+This also indicates that the SSDs are the bottleneck for
+the dense matrix multiplication in the eigensolver. This is not
+surprising because the sequential I/O performance of SSDs is an order of
+magnitude smaller than RAM. 
 
 \subsection{Compare EM eigensolvers with in-memory eigensolvers}
 We compare our EM eigensolvers with our in-mem eigensolvers as well as the original
@@ -213,9 +263,11 @@ for the basis and thus has a faster convergance rate.
 We need to show how much read and write we save with lazy evaluation. We should
 also show how much multiplication the lazy evaluation causes.
 
+\dz{report I/O to show how well the optimizations can reduce I/O.}
+
 \dz{decompose the runtime of an eigensolver.}
 
-\subsubsection{Performance, I/O vs. the number of cached matrices}
+\dz{Performance, I/O vs. the number of cached matrices}
 
 \subsubsection{External memory vs. distributed memory}
 

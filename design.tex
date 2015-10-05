@@ -78,33 +78,31 @@ sparse matrix multiplication and dense matrix operations
 generate much fewer but much larger I/O. Therefore, we provide additional
 optimizations to maximize sequential I/O throughput from a large SSD array.
 
-The original SAFS has a dedicated I/O thread for each SSD and application threads
-have to send I/O requests to one of the I/O threads when accessing data from SSDs.
-As such, an I/O thread accesses an SSD exclusively. This strategy avoids lock
-contention in the Linux kernel, but potentially increases the number of thread
-context switches for I/O access. It is necessary to have one I/O thread for
+The original SAFS has a dedicated I/O thread for each SSD. The I/O thread
+accesses the SSD exclusively to avoid lock contention in the Linux kernel.
+Application threads have to send I/O requests to one of the I/O threads
+with message passing when accessing data from SSDs. It is necessary to have
+one I/O thread for
 an SSD when applications issue many small I/O accesses because processing
 a large number of I/O accesses consumes a significant number of CPU cycles.
+However, when the workload only has large I/O requests, each I/O request takes
+much longer time to complete. As a result, the I/O threads are constantly put
+into sleep while waiting for I/O and each I/O completion may suffer from
+the latency of a thread context switch.
 
 The latency of a thread context switch becomes noticeable on a high-speed SSD
 array under a sequential I/O workload and it becomes critical to avoid thread
-context switch to gain I/O performance. Under such a workload, each I/O thread
-gets much fewer parallel I/O requests from an application and consumes much
-fewer CPU cycles to process the requests. As a result, an I/O thread is
-put into sleep while waiting for I/O and each I/O completion may suffer from
-the latency of a context switch.
-Therefore, instead of having an I/O thread for each SSD \cite{safs}, we
-use only a single I/O thread for each NUMA node, which is responsible for
-all of the SSDs connected to the NUMA node. As such, an I/O thread processes
-many more I/O requests to amortize the latency of a context switch.
-Similarly, if the computation in application threads did not saturate CPU,
-SAFS would put the application threads into sleep while they were waiting
-for I/O. This results in many thread context switches and, thus, both CPU and
-SSDs were under utilization. To saturate I/O, an application thread should
-continue
-issuing asynchronous I/O. However, instead of getting notified of I/O completion,
-application threads poll for I/O to avoid thread context switches when they
-complete all computation available to it.
+context switch to gain I/O performance. Therefore, instead of having an I/O
+thread for each SSD, we use only a single I/O thread for each NUMA node, which
+is responsible for all of the SSDs connected to the NUMA node. As such, an I/O
+thread processes many more I/O requests to amortize the latency of a context
+switch. Similarly, application threads communicate with I/O threads through
+message passing when issuing I/O requests. If the computation in application
+threads did not saturate CPU, SAFS would put the application threads into
+sleep while they were waiting for I/O. This results in many thread context
+switches and underutilization of both CPU and SSDs. To saturate I/O,
+an application thread issues asynchronous I/O and poll for I/O to avoid thread
+context switches after completing all computation available to it.
 
 To better support access to many relatively small files simultaneously, SAFS
 stripes data in a file across SSDs with a different striping order for each file.
@@ -113,16 +111,11 @@ I/O utialization. Due to the sequential I/O workload, FlashEigen stripes data
 across SSDs with a large block size, in the order of multiple
 megabytes, to increase I/O throughput and potentially reduce write amplification
 on SSDs \cite{}. Such a large block size may cause storage skew for small files
-on a large SSD array if every file stripes data in the same order.
-The same striping order may also cause more I/O accesses to hit some of the SSDs
-and saturate them while other SSDs are under utilization. Therefore, whenever
-a new file is created, SAFS generates a random striping order for the file to
-evenly distribute I/O among SSDs. SAFS stores the striping order with the file
-for future data retrieval.
-
-\dz{fair I/O scheduling}
-
-\dz{use a large I/O blocks in the kernel}
+on a large SSD array if every file stripes data in the same order. Using
+the same striping order for all files may also cause skew in I/O access.
+Therefore, SAFS generates a random striping order for each file to evenly
+distribute I/O among SSDs when a file is created. SAFS stores the striping
+order with the file for future data retrieval.
 
 \subsection{Sparse matrix multiplication} \label{spmm}
 Sparse matrix multiplication is a computationally expensive
@@ -132,9 +125,9 @@ DRAM. Sparse matrix dense matrix multiplication (SpMM) increases data locality
 and improve overall performance of an eigensolver. Therefore, a block extension
 of an eigensolver is preferred.
 
-To handle a sparse graph with billions of vertices, we perform sparse matrix
-multiplication in semi-external memory (SEM). That is, we keep the vectors
-or dense matrices in memory and the sparse
+To scale sparse matrix multiplication to a sparse graph with billions of vertices,
+we perform sparse matrix multiplication in semi-external memory (SEM). That is,
+we keep the vectors or dense matrices in memory and the sparse
 matrix on SSDs. This strategy enables nearly in-memory performance while achieving
 the scalability in proportion to the ratio of edges to vertices in a graph.
 
@@ -165,9 +158,8 @@ When a tile is small, the rows from the input and output dense matrices
 involved in the multiplication with the tile are always kept in the CPU cache
 during the multiplication. The optimal tile size should fill the CPU cache
 with the rows of the dense matrices involved in the multiplication with
-the tile and is affected by the number of columns of the dense matrices.
-The number of columns of these dense matrices are chosen by users. Instead
-of generating a sparse matrix with
+the tile and is affected by the number of columns of the dense matrices,
+which are chosen by users. Instead of generating a sparse matrix with
 different tile sizes optimized for different numbers of columns in the dense
 matrices, we use a relatively small tile size and rely on the runtime system
 to optimize for different numbers of columns (in section \ref{sec:exec}).
@@ -190,18 +182,18 @@ to store non-zero entries in a tile. In very sparse matrices such as
 many real-world graphs, many rows in a tile do not have any non-zero entries.
 The CSR (CSC) format requires an entry for each row (column) in the row
 (column) index. Therefore, the CSR or CSC format waste space when storing elements
-in a tile. Instead, we use a variant of the CSR format that only keeps data for
-rows with non-zero entries in a tile shown in Figure \ref{tile_format}. This
-format maintains a row header for each row with more than one non-zero entries.
-A row header has an identifier to indicate the row number, followed by column
-indices. We refer to this format as SCSR (Super Compressed Row Storage).
+in a tile. Instead, we only keep data for rows with non-zero entries in a tile
+shown in Figure \ref{tile_format} and refer to this format as SCSR (Super
+Compressed Row Storage). This format maintains a row header for each non-empty
+row. A row header has an identifier to indicate the row number, followed by
+column indices. 
 The most significant bit of the identifier is always set to 1, while the most
 significant bit of a column index entry is always set to 0. As such, we can easily
 distinguish a row identifier from a column index entry and determine the end
-of a row. Thanks to the small size of a tile, we use two bytes to store a row
+of a row. Thanks to the small size of a tile, we use two bytes to further store a row
 number and a column index entry to reduce the storage size. Since the most
-significant bit is used to indicate the beginning of a row, the maximum tile size
-is $32K \times 32K$.
+significant bit is used to indicate the beginning of a row, this format allows
+a maximum tile size of $32K \times 32K$.
 
 For many real-world graphs, many rows in a tile have only one non-zero entries,
 thanks to their sparsity and nearly random vertex connection. Storing these
@@ -283,12 +275,12 @@ the computation with the \textit{super tile}.
 
 Load balancing also plays a key role in sparse matrix multiplication on
 many real-world graphs due to their power-law distribution in vertex degree.
-In FlashEigen, a worker thread first processes partitions with more non-zero
-entries, originally assigned to the thread. When a worker thread finishes
+In FlashEigen, a worker thread first processes partitions originally assigned
+to the thread. When a worker thread finishes
 all of its own partitions, it steals partitions that have not been processed
 from other worker threads.
 
-In spite of nearly random distribution of non-zero entries in a sparse matrix,
+In spite of nearly random edge connection in a real-world graph,
 there exists regularity that allows vectorization to improve performance
 in sparse matrix dense matrix multiplication. For each non-zero entry, we
 need to multiply it with the corresponding row from the input dense matrix
@@ -304,19 +296,20 @@ computes eigenvalues of a billion-node graph or computes many eigenvalues
 of a multi-million-node graph. The number of vectors in the subspace
 increases with the number of required eigenvalues. Furthermore, a larger
 number of vectors in the subspace improves the convergence rate of an eigensolver. 
-It is often that an eigensolver needs multiple terabytes to store the vectors
-in the subspace for eigenvalue problems at such a scale. Therefore, FlashEigen
-stores these vectors on SSDs.
+It is often that the storage size required by the subspace is larger than
+the sparse matrix for eigendecomposition on many real-world graphs. Therefore,
+FlashEigen stores these vectors on SSDs.
 
-FlashEigen stores multiple vectors of the subspace in a dense matrix physically.
-One reason is that the Anasazi eigensolvers update multiple vectors of the subspace
-in an iteration due to the block extension of the eigenvalue algorithms.
-The number of vectors stored in a matrix is determined by the block size of
-a block eigensolver.
-This design also helps garbage collection in lazy evaluation (section \ref{sec:lazy_eval}).
+The Anasazi framework provides a set of programming interface to expose
+the vectors in the subspace to users as dense matrices and allow users to
+redefine the dense matrices and the operations on them. FlashEigen implements
+the programming interface and stores the vectors of the subspace on SSDs.
+The Anasazi eigensolvers update multiple vectors of the subspace in an iteration
+due to the block extension, so FlashEigen stores multiple vectors in a dense
+matrix physically and the number of vectors in a matrix is determined by
+the block size of a block eigensolver. This design also helps garbage
+collection in lazy evaluation (section \ref{sec:lazy_eval}).
 As such, the subspace is composed of multiple tall-and-skinny dense matrices.
-However, the eigensolvers still need to access individual vectors,
-so we organize the elements in the dense matrices in column-major order. 
 
 \begin{table}
 	\begin{center}
@@ -352,13 +345,9 @@ so we organize the elements in the dense matrices in column-major order.
 	\label{anasazi_ops}
 \end{table}
 
-The Anasazi eigensolvers allow users to implement
-the tall-and-skinny matrices and their operations. Such flexibility allows us to
-store these large dense matrices on SSDs or even not physically store them.
-
 FlashEigen requires a set of dense matrix operations shown in Table
-\ref{anasazi_ops}. $op1-8$ are the operations required by the original Anasazi
-eigensolvers. The most computationally expensive operations are the two
+\ref{anasazi_ops}. $op1-8$ are the operations required by the Anasazi
+framework. The most computationally expensive operations are the two
 matrix multiplication operations: $op1$ and $op3$, mainly used for
 reorthogonalization to fix float-point rounding errors. The eigensolvers
 use $op7$ and $op8$ to access individual columns of a dense matrix,
@@ -371,14 +360,15 @@ matrix when it is passed to the SpMM operation.
 
 It is challenging to achieve the performance of external-memory dense matrix
 operations comparable to their in-memory counterparts. Unlike sparse matrix
-multiplication, these dense matrix operations are less computationally
-intensive. Even though SSDs are fast, their sequential I/O performance is
-still an order of magnitude slower than RAM.
+multiplication, these dense matrix operations are less memory intensive.
+Even though SSDs are fast, their sequential I/O performance is still an order
+of magnitude slower than RAM.
 Furthermore, SSDs wears out after a certain amount of write \cite{}.
 Even enterprise SSDs \cite{} only allows a small number of DWPD
 (diskful writes per day). Therefore, FlashEigen optimizes dense matrix operations
-with the goals of maximizing I/O throughput from SSDs and minimizing the amount
-of data read and written to SSDs.
+with three goals: \textit{(i)} maximizing I/O throughput from SSDs,
+\textit{(ii)} minimizing the amount of data read from SSDs,
+\textit{(iii)} reducing SSD wearout.
 
 %\begin{figure}
 %	\begin{center}
@@ -393,27 +383,31 @@ of data read and written to SSDs.
 %	\end{center}
 %\end{figure}
 
-\subsubsection{Parallelization and external memory access}
+\subsubsection{Parallelization and external memory access} \label{par_em}
 We partition the tall-and-skinny matrices horizontally for parallelization
 and external-memory access. Figure \ref{dense_mat} (b) illustrates the format
-of such a dense matrix. Like a NUMA dense matrix in Figure \ref{dense_mat} (a),
+of an external-memory tall-and-skinny matrix. Like a NUMA dense matrix in
+Figure \ref{dense_mat} (a),
 an external-memory matrix is divided into multiple row intervals and data
 in a row interval is stored contiguously. Unlike a NUMA dense matrix, elements
-in a row interval of an external-memory dense matrix are stored in column-major order
+in a row interval of an external-memory matrix are stored in column-major order
 for easily accessing individual columns. The size of a row interval is chosen
 according to the number of columns in the matrix to generate large I/O requests,
 in the order of megabytes.
 
-Once data in a partition is loaded to memory, we further partition it to
+Once data in a row interval is loaded to memory, we further partition it to
 smaller row intervals so that data
 in the sub-row interval fits in CPU cache. \dz{TODO: The size of the sub row
 interval should also adapt to the matrix width.} This optimization significantly
-increase CPU cache hits in a sequence of dense matrix operations constructed by
+increase CPU cache hits in a sequence of dense matrix operations constructed in
 the lazy evaluation (Section \ref{sec:lazy_eval}).
 
-For all operations in Table \ref{anasazi_ops}, we assign data in the same row
-interval from all of the tall-and-skinny
-matrices in an operation to the same thread for parallel processing.
+To parallelize a matrix operation, we assign one row interval at a time to
+a worker thread. When a worker thread gets a row interval, it owns the row
+interval and is responsible for accessing the data in the row interval from
+all of the tall-and-skinny matrices and performing computation on them.
+When processing a row interval, a worker thread does not need to access data
+from another row interval on SSDs.
 %(Figure \ref{fig:mat_par}).
 Majority of the operations in Table \ref{anasazi_ops} output tall-and-skinny
 matricies whose rows only depend on the same rows from the input matrices.
@@ -430,8 +424,8 @@ so we parallelize it in the same fashion as other operations.
 $op6$ can be evaluated in a similar fashion to $op3$. Therefore, all matrix
 operations in Table \ref{anasazi_ops} can be parallelized in the same fashion.
 
-\dz{a large write is required to achieve persistent write performance and
-wearout?}
+%\dz{a large write is required to achieve persistent write performance and
+%wearout?}
 %We maintain a global work queue of row intervals and dispatch one row interval
 %to a thread at a time. This strategy allows worker threads to process row
 %intervals close to each other, which helps to accumulate very large writes to SSDs.
@@ -451,8 +445,9 @@ The Anasazi eigensolvers frequently perform a matrix operation on many
 tall-and-skinny matrices and the number of the matrices varies in each iteration.
 The number of matrices can be as large as multiple hundred when an eigensolver
 computes hundreds of eigenvalues. $op1$ and $op3$ are such operations.
-If a thread has to read the data in a row interval from all of the matrices,
-the amount of data in memory is still very large. The other choice is to read
+If a thread has to read the data in a row interval from all of the matrices
+before performing computation,
+the amount of data in memory is still very large. Another option is to read
 only part of a partition, which results in many small reads and writes to SSDs,
 because the matrices are organized in column-major order.
 
@@ -466,15 +461,16 @@ a intermediate tall-and-skinny matrix conceptually and we apply an addition
 operation on all intermediate matrices to generate the final result.
 Materializing these
 intermediate matrices would result in large memory consumption if we store them
-in memory or large amount of I/O if we store them on SSDs. Instead, we leverage
-the lazy evaluation in Section \ref{sec:lazy_eval}, which only materializes
-part of them at a time and passes the materialized part to the addition operation
-to generate the final result.
+in memory or a large amount of I/O if we store them on SSDs. Instead, we leverage
+the lazy evaluation in Section \ref{sec:lazy_eval} and only materialize part of
+the intermediate matrices at a time and passes the materialized parts to
+the addition operation to generate the final result.
 
 For $op3$, an eigensolver usually transopses a group of tall-and-skinny matrices
 and multiply them with a tall-and-skinny matrix. We apply a similar strategy to
 $op3$. We break the large group of dense matrices into multiple groups and each
-group shares the same tall-and-skinny matrix on the right. Each group generates
+group shares the same tall-and-skinny matrix in the right operand. Each group
+generates
 a small matrix that can be kept in memory. In this case, all input matrices
 are large and are stored on SSDs. To minimize I/O, we perform operations on
 each group together to share I/O for accessing the tall-and-skinny matrix
@@ -491,11 +487,10 @@ To enable lazy evaluation, we define a special matrix to represent the output
 of a matrix operation. Such a matrix does not store the data of
 an operation result. Instead, it stores the computation and a reference to
 the input matrices. We refer to these special matrices as \textit{virtual matrices}.
-Most matrix operations in Table \ref{anasazi_ops} output \textit{virtual matrices},
-as long as the output matrices are tall-and-skinny matrices. Only \textit{op3}
+We can evaluate most matrix operations in Table \ref{anasazi_ops} lazily,
+as long as the output matrix of an operation is a tall-and-skinny matrix. Only \textit{op3}
 and \textit{op6} cannot be evaluated lazily because they output small matrices
-and small vectors and the output of these two operations is stored in Anasazi's
-native matrices and vectors.
+and small vectors stored in Anasazi's native matrices and vectors.
 
 %With \textit{virtual matrices}, we construct a directed acyclic graph (DAG)
 %at runtime to represent computation in FlashEigen. In the DAG, we store
@@ -508,11 +503,11 @@ native matrices and vectors.
 
 All matrices in FlashEigen are immutable so that \textit{virtual matrices}
 can generate the same result every time when they are materialized. Therefore,
-our implementation of the matrix operations always generates new matrices.
-The original Anasazi eigensolvers require in-place update on the existing dense
-matrices, so FlashEigen only passes a pointer to a dense matrix to the Anasazi
-eigensolvers instead of the matrix data. This approach is equivalent to variable
-renaming used by compilers.
+our implementation of the matrix operations in Table \ref{anasazi_ops} always
+generates new matrices. The original Anasazi matrix operations require in-place
+update on the existing dense matrices, so FlashEigen only passes a pointer to
+a dense matrix to the Anasazi eigensolvers instead of the matrix data.
+%This approach is equivalent to variable renaming used by compilers.
 A dense matrix is garbage collected only when there are not any references to
 the matrix.
 
@@ -561,19 +556,19 @@ the matrix.
 %\end{figure}
 
 To perform actual computation, FlashEigen needs to materialize
-\textit{virtual matrices} in the two cases. FlashEigen materializes
-a \textit{virtual matrix} when encountering \textit{op3} and \textit{op6}
-because these two operations output Anasazi's native matrices and vectors.
-Each \textit{virtual matrix} represent some computation on some materialized
-tall-and-skinny matrices that are stored on SSDs. FlashEigen materializes
+\textit{virtual matrices}. It materializes a \textit{virtual matrix} when
+encountering \textit{op3} and \textit{op6} because these two operations
+output Anasazi's native matrices and vectors.
+A \textit{virtual matrix} represents some computation on some materialized
+tall-and-skinny matrices stored on SSDs. FlashEigen materializes
 a \textit{virtual matrix}, which has more than one materialized input matrix,
 to minimize the amount of data read from SSDs.
 %FlashEigen also materializes all of the dense matrices in the basis.
 
 A \textit{virtual matrix} may contain a sequence of operations, so materializing
-it may trigger matrix materialization recursively.
-We discard the materialized partition of a matrix, once it is no longer needed,
-to avoid writing data of a intermediate \textit{virtual matrix} to SSDs.
+it may trigger matrix materialization recursively. We discard the materialized
+partition of an intermediate matrix, once it is no longer needed, to avoid
+writing data of an intermediate matrix to SSDs.
 We partition a \textit{virtual matrix} horizontally in the same fashion as
 the external-memory matrices and materialize each partation independantly. 
 To increase CPU cache hits, we use a much smaller partition size than
@@ -583,15 +578,15 @@ still in the CPU cache when it is fed to the next operation.
 \subsubsection{Matrix caching}
 FlashEigen deploys two forms of matrix caching to reduce I/O to SSDs.
 In the first case, FlashEigen worker threads cache part of a tall-and-skinny
-matrix locally.
-In the other case, FlashEigen can also cache the most recent tall-and-skinny
-matrix in the vector subspace.
+matrix locally. In the other case, FlashEigen can also cache the most recent
+tall-and-skinny matrix in the vector subspace.
 
 Caching part of a tall-and-skinny matrix read from SSDs benefits some of
 the matrix operations. One example is the optimization for $op3$ in section
 \ref{par_em}, which breaks a large group of dense matrices into multiple
 subgroups and the matrix in the right operand is shared by all of the subgroups.
-A worker thread only needs to cache data in a row interval that is being processed
+A worker thread only needs to cache data in a row interval of the right matrix
+that is currently being processed
 because a thread processes one row interval at a time and each row interval of
 the tall-and-skinny matrices is processed only once.
 Therefore, a worker thread can buffers the data in a row interval of a matrix

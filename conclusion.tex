@@ -1,0 +1,36 @@
+We present an external-memory framework called FlashEigen using a large array
+of commodity SSDs to solve eigenvalue problems at the billion scale. FlashEigen
+utilizes the Anasazi framework to get state-of-art eigensolver implementations
+so that we can focus on optimizations on sparse matrix multiplication and dense
+matrix multiplication on SSDs.
+
+We implement a sparse matrix dense matrix multiplication in the semi-external
+memory fashion. That is, we keep the sparse matrix on SSDs and the dense matrices
+in memory. We deploy a set of memory and I/O optimizations so that the sparse
+matrix dense matrix multiplication has performance comparable to its in-memory
+counterparts while significantly outperforming the MKL and Trilinos implementation.
+The semi-external sparse matrix multiplication is able to saturate either CPU or
+SSDs or both, which suggests that we have achieved the maximal performance from
+the existing hardware.
+
+We further implement and optimize external-memory matrix multiplication for
+FlashEigen. When computing eigenvalues on many real-world graphs, the storage
+size required by the subspace in an eigensolver is massive. Therefore, we keep
+the subspace on the SSD array and deploy a set of I/O optimizations on dense
+matrix multiplication. With the I/O optimizations, we saturate the SSDs in
+dense matrix multiplication and achieve the maximal performance from the existing
+hardware. However, the SSD array is an order of magnitude slower than RAM, so
+external-memory dense matrix multiplication is about three or four times slower
+than the state-of-art in-memory dense matrix multiplication.
+
+We implement our external-memory eigensolver with the semi-external memory
+sparse matrix multiplication and the external-memory dense matrix multiplication.
+Our experiments show that our external-memory eigensolver achieves at least
+30\% of the performance of its in-memory counterparts. For a small number of
+eigenvalues, which is the most common case for spectral analysis, our external-memory
+eigensolver has less than 50\% performance loss. We further show that our external-
+memory eigensolver is able to scale a graph with 3.4 billion vertices and 129
+billion edges. It finishes eigendecomposition within a reasonable amount of time
+and consumes a fairly small amount of resources. This suggests that our external-
+memory eigensolver is able to scale to even a large eigenvalue problem in our
+1TB-RAM machine.

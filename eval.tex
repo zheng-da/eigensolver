@@ -300,7 +300,7 @@ The external-memory dense matrix multiplication has almost saturated
 the I/O bandwidth of the SSDs (Figure \ref{perf:dmm_io}). The average
 I/O throughput reaches 10.87GB/s from the entire SSD array or 464MB/s
 per SSD, while the peak throughput of an SSD is approaching 500MB/s,
-which is close to the maximal I/O throughput of the SSDs, advertised by
+which is close to the maximal I/O throughput of 540MB/s per SSD, advertised by
 the SSD vendor. This also indicates that the SSDs are the bottleneck for
 the dense matrix multiplication in the eigensolver. This is not
 surprising because the sequential I/O performance of SSDs is an order of
@@ -316,24 +316,103 @@ wearout. We evaluate our external-memory eigensolver and compare it
 with its in-memory counterpart as well as the original KrylovSchur eigensolver
 in the Anasazi framework.
 
-\subsubsection{Tuning the eigensolver for faster convergence}
-The subspace size and the block size significantly affect the performance of
+The KrylovSchur eigensolver has two important parameters: the subspace size
+and the block size. They significantly affect the convergence of
 the KrylovSchur eigensolver. A reasonably large subspace size and block size
-accelerates its convergence. However, a larger subspace increases the storage
-size, computation and I/O complexity in a single matrix operation.
-The computation complexity increases roughly linearly with the number of blocks
-and the square of the block size. A larger block size requires more memory
-in the semi-external memory eigensolver.
+accelerates its convergence. However, a larger subspace increases memory
+consumption of the eigensolver as well as computation and I/O complexity
+in a single matrix operation. A larger block size increases memory consumption
+of FlashEigen.
 
-SSDs significantly increases memory available to the eigensolver, so we can
+For the experiments below, we select the values for the two parameters that
+achieve the best runtime performance for the eigensolvers. We assume that
+our setting is not constrained by memory size available to the machine.
+Because sparse matrix in Trilinos is not optimized for
+the dense matrix with more than one column, we use $1$ as the block size and
+$2 \times ev$ as the number of blocks for most of the graphs in the original
+KrylovSchur eigensolver, where $ev$ is the number of the eigenvalues to compute.
+For the FlashEigen KrylovSchur eigensolver, we choose the subspace size and
+the block size to reduce the amount of I/O to SSDs. we use $1$ as the block size and
+$2 \times ev$ as the number of blocks when computing a small number of eigenvalues
+and use $4$ as the block size and $ev$ as the number of blocks. Therefore,
+the FlashEigen eigensolver uses the subspace twice as large as the one used by
+the original KrylovSchur eigensolver when computing a large number of eigenvalues.
+However, the eigenvalues of the graph W are very close to each other, so we have
+to use a much larger subspace to have the eigensolver to converge or converge
+faster. For the W graph, we use the subspace four times larger than the ones
+used for other graphs. Therefore, we can trade off the runtime performance
+with memory consumption in eigendecomposition.
 
 \subsubsection{Performance of eigensolvers}
 
+We evaluate the performance of our SEM eigensolver and compare its performance
+with our in-memory eigensolver and the original KrylovSchur eigensolver.
+We compute different numbers of eigenvalues on the three smaller graphs in
+Table \ref{graphs}. Only our SEM eigensolver is able to compute eigenvalues
+on the page graph on the 1TB-memory machine.
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{eigen-runtime}
+		\vspace{-15pt}
+		\caption{The runtime of the three KrylovSchur implementations.}
+		\label{perf:eigen_rt}
+	\end{center}
+\end{figure}
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{eigen-decompose}
+		\vspace{-15pt}
+		\caption{.}
+		\label{perf:eigen_decompose}
+	\end{center}
+\end{figure}
+
+Our SEM eigensolver achieves at least 30\% performance of our in-memory
+eigensolver, while the in-memory eigensolver outperforms the original
+KrylovSchur eigensolver (Figure \ref{perf:eigen_rt}). The SEM eigensolver
+is more efficient to compute a small number of eigenvalues and is able
+to achieve around 50\% performance of our in-memory eigensolver.
+The performance gap between the in-memory and SEM eigensolvers with the number
+of eigenvalues to compute, and the increase of the performance gap can be
+explained by Figure \ref{perf:eigen_decompose}. SpMM and reorthogonalization
+account for most of computation time when computing a small number of eigenvalues,
+but reorthogonalization eventually dominates the eigendecomposition for computing
+many eigenvalues. Because external-memory dense matrix multiplication is several
+times slower than the in-memory implementations, reorthogonalization accounts for
+over 90\% of runtime in the SEM eigensolver for computing a large number of
+eigenvalues. For many spectral analysis tasks, users only require a small number
+of eigenvalues.
+
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{eigen-mem}
+		\vspace{-15pt}
+		\caption{The memory consumptioin of the three KrylovSchur
+		implementations.}
+		\label{perf:eigen_mem}
+	\end{center}
+\end{figure}
+
+The SEM eigensolver uses a small fraction of memory used by its in-memory
+counterparts and the original Trilinos eigensolver and its memory consumption
+remains roughly the same as the number of eigenvalues computed by the eigensolvers
+increases. A small memory consumption provides two benefits. First, FlashEigen
+is able to scale to a much larger eigenvalue problem. The second benefit is that
+FlashEigen gives users more freedom to choose the subspace size that gives the
+fastest convergence in a given eigenvalue problem because SSDs significantly
+increases memory available to the eigensolver. We have to point out that our
+experiments assume that we choose the subspace size that is not constrained by
+the memory size in a machine.
+
 \dz{report I/O to show how well the optimizations can reduce I/O.}
-
-\dz{decompose the runtime of an eigensolver.}
-
-\dz{memory consumption of the external-memory eigensolver.}
 
 \dz{Performance, I/O vs. the number of cached matrices}
 
@@ -353,3 +432,24 @@ in the following cases:
 \end{itemize}
 
 \subsubsection{FlashEigen on the page graph}
+
+\begin{table}
+	\begin{center}
+		\small
+		\begin{tabular}{|c|c|c|c|c|}
+			\hline
+			\#eigenvalues & runtime & memory & read & write \\
+			\hline
+			8 & 4.2 hours & & 145TB & 4TB \\
+			\hline
+		\end{tabular}
+		\normalsize
+	\end{center}
+	\caption{The performance and resource consumption of computing eigenvalues
+	on the page graoh.}
+	\label{pg_ev}
+\end{table}
+
+The average I/O throughput during the computation of 8 eigenvalues is about
+10GB/s, which is very close to the maximal I/O throughput provided by
+the SSD array.

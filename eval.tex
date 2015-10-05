@@ -431,7 +431,16 @@ in the following cases:
 	\item on a larger graph,
 \end{itemize}
 
-\subsubsection{FlashEigen on the page graph}
+\subsubsection{Scale to billion-node graphs}
+
+We evaluate the scalability of FlashEigen with the page graph with 3.4 billion
+vertices and 129 billion edges. Because the page graph is a directed graph,
+its adjacency matrix is asymmetric and we perform singular value decomposition
+(SVD) on the adjacency matrix instead of simple eigendecomposition. For the page
+graph, we use $2$ for the block size and $2 \times ev$ for the number of blocks
+because sparse matrix multiplication is completely bottlenecked by SSDs.
+Neither the in-memory eigensolver nor the original Trilinos eigensolver is able
+to compute eigenvalues on the page graph with 1TB RAM.
 
 \begin{table}
 	\begin{center}
@@ -442,14 +451,21 @@ in the following cases:
 			\hline
 			8 & 4.2 hours & & 145TB & 4TB \\
 			\hline
+			32 & & & & \\
+			\hline
 		\end{tabular}
 		\normalsize
 	\end{center}
 	\caption{The performance and resource consumption of computing eigenvalues
-	on the page graoh.}
+	on the page graph.}
 	\label{pg_ev}
 \end{table}
 
+FlashEigen computes a fairly large number of eigenvalues within a reasonable
+amount of time and consumes a fairly small amount of resources given the large
+size of the eigenvalue problem.
 The average I/O throughput during the computation of 8 eigenvalues is about
 10GB/s, which is very close to the maximal I/O throughput provided by
 the SSD array.
+Given the relative small memory footprint, we are able to scale FlashEigen
+to a much larger eigenvalue problem on our 1TB-RAM machine.

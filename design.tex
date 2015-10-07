@@ -290,6 +290,18 @@ AVX \cite{avx}. The current implementation relies on GCC's auto-vectorization
 to translate the C code to the vector CPU instructions by predefining the matrix
 width in the code.
 
+When accessing a sparse matrix on SSDs, we keep a set of memory buffers for
+I/O access to reduce the overhead of populating memory buffers with physical
+pages. For a large spare matrix, each tile row is fairly large, in the order
+of tens of megabytes. The operating system usually allocate a memory buffer
+for such I/O size with \textit{mmap()} and populates the buffer with physical
+pages when the buffer is used. It is computationally expensive to populate
+large memory buffers frequently. When accessing high-throughput I/O devices,
+such overhead can cause substantial performance loss. However, tile rows
+in a sparse matrix usually have differnt sizes. Therefore, we keep memory buffers
+allocated previously and reuse them for new I/O requests. We resize a previously
+allocated memory buffer if it is too small for a new I/O request.
+
 \subsection{Dense matrix operations}
 The vector subspace required by an eigensolver is massive when the eigensolver
 computes eigenvalues of a billion-node graph or computes many eigenvalues
@@ -310,6 +322,12 @@ matrix physically and the number of vectors in a matrix is determined by
 the block size of a block eigensolver. This design also helps garbage
 collection in lazy evaluation (section \ref{sec:lazy_eval}).
 As such, the subspace is composed of multiple tall-and-skinny dense matrices.
+
+We store each tall-and-skinny matrix in a separate SAFS file to leverage
+the optimizations in SAFS. This guarantees that I/O accesses to the dense
+matrices are evenly distributed to all SSDs by SAFS, regardless of the number of
+SSDs and the subspace size. It also eases matrix creation and deletion by
+simply creating and deleting an SAFS file.
 
 \begin{table}
 	\begin{center}
@@ -401,6 +419,17 @@ in the sub-row interval fits in CPU cache. \dz{TODO: The size of the sub row
 interval should also adapt to the matrix width.} This optimization significantly
 increase CPU cache hits in a sequence of dense matrix operations constructed in
 the lazy evaluation (Section \ref{sec:lazy_eval}).
+
+Like sparse matrix multiplication, we maintain a per-thread memory buffer pool
+for I/O access to reduce the overhead of populating memory buffers with
+physical pages when accessing dense matrices on SSDs. To increase I/O throughput,
+we access data in dense
+matrices on SSDs with large I/O requests, which requires large memory buffers.
+Unlike sparse matrix multiplication, all I/O requests for accessing dense
+matrices have the same size. Therefore, we maintain a pool of memory buffers
+with physical pages populated in advance and associate each I/O request with
+a buffer from the set. We maintain such a pool for each worker thread to
+minimize locking overhead.
 
 To parallelize a matrix operation, we assign one row interval at a time to
 a worker thread. When a worker thread gets a row interval, it owns the row

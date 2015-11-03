@@ -1,9 +1,25 @@
 \section{Design}
-FlashEigen is an external-memory eigensolver optimized for any fast I/O devices
-such as a large SSD array to compute eigenvalues of sparse graphs. It takes
-advantage of the flexible programming interface of the Anasazi framework and
-focuses on optimizing sparse matrix dense matrix multiplication and dense
-matrix operations on SSDs.
+FlashEigen is an external-memory eigensolver framework optimized for any fast
+I/O devices
+such as a large SSD array to compute eigenvalues of sparse graphs (Figure
+\ref{arch}). We build FlashEigen on top of SAFS, a user-space filesystem,
+to fully utilize the I/O throughput of a large SSD array. Instead of
+implementing eigenvalue algorithms from scratch, we integrate FlashEigen
+with the Anasazi framework to compute eigenvalues. The Anasazi framework
+implements multiple state-of-art eigenvalue algorithms and provides users
+a flexible programming interface to redefine both sparse and dense matrix
+operations required by the eigenvalue algorithms. FlashEigen stores both sparse
+and dense matrices in SAFS and focuses on optimizing the matrix operations
+required by the Anasazi eigensolvers for SSDs.
+
+\begin{figure}
+\centering
+\includegraphics[scale=0.4]{./architecture.pdf}
+\vspace{-5pt}
+\caption{The architecture of FlashEigen.}
+\vspace{-5pt}
+\label{arch}
+\end{figure}
 
 \subsection{Eigensolver algorithm}
 
@@ -32,46 +48,33 @@ matrix operations on SSDs.
 \end{algorithm}
 
 The state-of-art eigenvalue algorithms compute eigenvalues with iterative
-methods. Figure \ref{eigencode} shows the general steps used by the eigenvalue
+methods. Algorithm \ref{eigencode} shows the general steps used by the eigenvalue
 algorithms.
 Step (1) constructs a vector subspace $S \in \mathbb{R}^{n \times m}$, where
 $n$ is the number of rows and columns of a sparse matrix and $m$ is the number
 of vectors in the subspace. When computing eigenvalues of a sparse graph,
 two key operations in this step are sparse matrix multiplication to construct
-the subspace and reorthogonalization to correct float-point rounding errors.
-A block extenion of an eigensolver updates multiple vectors in the subspace
-in a single step, which leads to sparse matrix dense matrix multiplication.
+the subspace and reorthogonalization to correct floating-point rounding errors.
 Step (2) projects the large sparse matrix to a much smaller matrix with only
 $m$ rows and $m$ columns, which can be solved by other eigensolvers such as
 the one in LAPACK \cite{lapack}. Step (3) projects the solution of the small
 eigenvalue problem back to the original eigenvalue problem. Step (4) tests
 whether the projected solution fulfills the precision requirement given by
-users. If not, the algorithm may adjust the vector subspace, jump back to
-step (1) and continue the process.
+users. If not, the algorithm adjusts the vector subspace, returns to step (1)
+and continues the process.
 
-\subsection{The architecture of FlashEigen}
-
-We build FlashEigen on top of SAFS, a user-space filesystem, to fully utilize
-the I/O throughput of a large SSD array. The architecture of FlashEigen is shown
-in Figure \ref{arch}. FlashEigen has two main components that process sparse
-matrices and dense matrices respectively. It stores data of sparse matrices
-and dense matrices
-in SAFS and implements matrix operations required by the Anasazi eigensolvers.
-As such, the Anasazi eigensolvers can access data from SSDs.
-
-\begin{figure}
-\centering
-\includegraphics[scale=0.4]{./architecture.pdf}
-\vspace{-5pt}
-\caption{The architecture of FlashEigen.}
-\vspace{-5pt}
-\label{arch}
-\end{figure}
+The block extenion implemented in the Anasazi eigensolvers updates multiple
+vectors in the subspace in an iteration. This optimization leads to sparse
+matrix dense matrix multiplication and increases computation density to
+improve performance. The number of vectors to be updated together is determined
+by the \textit{block size}, denoted by $b$. The subspace size $m$
+is $b \times NB$, where $NB$ is the number of blocks.
 
 \subsection{SAFS}
 
 SAFS \cite{safs} is a user-space filesystem for a high-speed SSD array in
-a NUMA machine. It is implemented as a library and runs in the address space
+a NUMA (non-uniform memory architecture) machine. It is implemented as
+a library and runs in the address space
 of its application. It is deployed on top of the Linux native filesystem.
 SAFS was originally designed for optimizing small I/O accesses. However,
 sparse matrix multiplication and dense matrix operations
@@ -108,8 +111,8 @@ To better support access to many relatively small files simultaneously, SAFS
 stripes data in a file across SSDs with a different striping order for each file.
 This strategy stores data from multiple files evenly across SSDs and improves
 I/O utialization. Due to the sequential I/O workload, FlashEigen stripes data
-across SSDs with a large block size, in the order of multiple
-megabytes, to increase I/O throughput and potentially reduce write amplification
+across SSDs with a large block size, on the order of megabytes, to increase I/O
+throughput and potentially reduce write amplification
 on SSDs \cite{}. Such a large block size may cause storage skew for small files
 on a large SSD array if every file stripes data in the same order. Using
 the same striping order for all files may also cause skew in I/O access.
@@ -118,12 +121,13 @@ distribute I/O among SSDs when a file is created. SAFS stores the striping
 order with the file for future data retrieval.
 
 \subsection{Sparse matrix multiplication} \label{spmm}
-Sparse matrix multiplication is a computationally expensive
-operation in an eigensolver due to random memory access. Sparse matrix vector
-multiplication (SpMV) is usually limited by the random memory performance of
-DRAM. Sparse matrix dense matrix multiplication (SpMM) increases data locality
-and improve overall performance of an eigensolver. Therefore, a block extension
-of an eigensolver is preferred.
+Sparse matrix multiplication is one of the most computationally expensive
+operations in an eigensolver. Applying this operation on real-world graphs
+usually leads to many random memory accesses, so this operation is usually
+limited by the random memory performance of DRAM. The block extension
+in the Anasazi eigensolvers enables sparse matrix dense matrix multiplication
+to increase data locality and computation density and improve overall performance
+of an eigensolver.
 
 To scale sparse matrix multiplication to a sparse graph with billions of vertices,
 we perform sparse matrix multiplication in semi-external memory (SEM). That is,
@@ -147,7 +151,7 @@ CPU cache hits and reduce the amount of data read from SSDs.
 \centering
 \includegraphics[scale=0.3]{./sparse_mat.pdf}
 \vspace{-5pt}
-\caption{}
+\caption{The format of a sparse matrix in FlashEigen.}
 \vspace{-5pt}
 \label{sparse_mat}
 \end{figure}
@@ -181,7 +185,7 @@ To reduce the overall storage size of a sparse matrix, we use a compact format
 to store non-zero entries in a tile. In very sparse matrices such as
 many real-world graphs, many rows in a tile do not have any non-zero entries.
 The CSR (CSC) format requires an entry for each row (column) in the row
-(column) index. Therefore, the CSR or CSC format waste space when storing elements
+(column) index. Therefore, the CSR or CSC format wastes space when storing elements
 in a tile. Instead, we only keep data for rows with non-zero entries in a tile
 shown in Figure \ref{tile_format} and refer to this format as SCSR (Super
 Compressed Row Storage). This format maintains a row header for each non-empty
@@ -195,10 +199,11 @@ number and a column index entry to reduce the storage size. Since the most
 significant bit is used to indicate the beginning of a row, this format allows
 a maximum tile size of $32K \times 32K$.
 
-For many real-world graphs, many rows in a tile have only one non-zero entries,
+For many real-world graphs, many rows in a tile have only one non-zero entry,
 thanks to their sparsity and nearly random vertex connection. Storing these
-single-entry rows in the SCSR format results in many conditional jump CPU
-instructions in sparse matrix multiplication.
+single-entry rows in the SCSR format requires to move from one row to another
+for every entry, resulting in many extra conditional jump CPU instructions
+in sparse matrix multiplication.
 In contrast, the coordinate format (COO) is more suitable for storing these
 single-entry rows. It does not increase the storage size but significantly
 reduces the number of conditional jump instructions when we iterate
@@ -216,14 +221,20 @@ in memory during sparse matrix multiplication.
 
 \subsubsection{The dense matrix format for SpMM} \label{numa_mat}
 Dense matrices in sparse matrix multiplication are tall-and-skinny matrices
-with millions or even billions of rows but only several columns. We organize
-elements of the dense matrices in row-major order to increase data locallity,
-as shown in Figure \ref{dense_mat} (a).
+with millions or even billions of rows but only several columns. The number
+of rows in a dense matrix is determined by the number of vertices in a sparse
+graph and the number of columns is determined by the \textit{block size}
+in an eigensolver with the block extension. The dense matrix is kept in memory
+for SEM SpMM, so the size of the dense matrix governs the memory consumption
+of SpMM. Given the limited amount of RAM in a machine, the number of columns
+in a dense matrix has to be small. To increase data locality in SpMM, we organize
+elements of the dense matrices in row-major order, as shown in Figure
+\ref{dense_mat} (a).
 
 For a non-uniform memory architecture (NUMA), we partition the input dense matrix
 horizontally and store partitions evenly across NUMA nodes to fully utilize
 the bandwidth of memory and inter-processor links in sparse matrix
-multiplication. The NUMA architecture is commonly used in today's multi-processor
+multiplication. The NUMA architecture is prevalent in today's multi-processor
 servers, where each processor connects to its own memory banks. It is essential
 to fully utilize the bandwidth of memory and inter-processor links to achieve
 performance. As shown in Figure \ref{dense_mat} (a), we assign multiple
@@ -292,7 +303,7 @@ width in the code.
 
 When accessing a sparse matrix on SSDs, we keep a set of memory buffers for
 I/O access to reduce the overhead of populating memory buffers with physical
-pages. For a large spare matrix, each tile row is fairly large, in the order
+pages. For a large spare matrix, each tile row is fairly large, on the order
 of tens of megabytes. The operating system usually allocate a memory buffer
 for such I/O size with \textit{mmap()} and populates the buffer with physical
 pages when the buffer is used. It is computationally expensive to populate
@@ -308,7 +319,7 @@ computes eigenvalues of a billion-node graph or computes many eigenvalues
 of a multi-million-node graph. The number of vectors in the subspace
 increases with the number of required eigenvalues. Furthermore, a larger
 number of vectors in the subspace improves the convergence rate of an eigensolver. 
-It is often that the storage size required by the subspace is larger than
+The storage size required by the subspace is often larger than
 the sparse matrix for eigendecomposition on many real-world graphs. Therefore,
 FlashEigen stores these vectors on SSDs.
 
@@ -334,32 +345,36 @@ simply creating and deleting an SAFS file.
 		\small
 		\begin{tabular}{|c|c|c|c|c|}
 			\hline
-			& operation & customized output \\
+			name & operation & customized output \\
 			\hline
-			op1 & $CC \leftarrow \alpha \times AA \times B + \beta \times CC$ & yes \\
+			\textit{MvTimesMatAddMv} & $CC \leftarrow \alpha \times AA \times B + \beta \times CC$ & yes \\
 			\hline
-			op2 & $BB \leftarrow AA \times diag(vec)$ & yes \\
+			\textit{MvTransMv} & $A \leftarrow \alpha \times t(AA) \times BB$ & no \\
 			\hline
-			op3 & $A \leftarrow \alpha \times t(AA) \times BB$ & no \\
+			\textit{MvScale1} & $BB \leftarrow \alpha \times AA$ & yes \\
 			\hline
-			op4 & $CC \leftarrow \alpha \times AA + \beta \times BB$ & yes \\
+			\textit{MvScale2} & $BB \leftarrow AA \times diag(vec)$ & yes \\
 			\hline
-			op5 & $BB \leftarrow \alpha \times AA$ & yes \\
+			\textit{MvAddMv} & $CC \leftarrow \alpha \times AA + \beta \times BB$ & yes \\
 			\hline
-			op6 & $vec \leftarrow norm\_col(AA)$ & no \\
+			\textit{MvDot} & $vec[i] \leftarrow t(AA[,i]) * BB[,i]$ & no \\
 			\hline
-			op7 & $BB \leftarrow AA[,idxs]$ & yes \\
+			\textit{MvNorm} & $vec \leftarrow norm\_col(AA)$ & no \\
 			\hline
-			op8 & $AA[,idxs] \leftarrow BB$ & yes \\
+			\textit{CloneView} & $AA[,idxs]$ & yes \\
 			\hline
-			op9 & $AA \leftarrow conv\_layout(BB)$ & yes \\
+			\textit{SetBlock} & $AA[,idxs] \leftarrow BB$ & yes \\
+			\hline
+			\textit{MvRandom} & $AA <- rand_init$ & yes \\
+			\hline
+			\textit{ConvLayout} & $AA \leftarrow conv\_layout(BB)$ & yes \\
 			\hline
 		\end{tabular}
 		\normalsize
 	\end{center}
 	\caption{The dense matrix operations required by the Anasazi eigensolvers.
-		$XX$ represents a tall dense matrix, $X$ represents a small dense matrix,
-	$\alpha$ and $\beta$ represents scalar variables.}
+		$AA$ and $BB$ represents a tall dense matrix, $A$ and $B$ represents
+		a small dense matrix, $\alpha$ and $\beta$ represents scalar variables.}
 	\label{anasazi_ops}
 \end{table}
 
@@ -367,7 +382,7 @@ FlashEigen requires a set of dense matrix operations shown in Table
 \ref{anasazi_ops}. $op1-8$ are the operations required by the Anasazi
 framework. The most computationally expensive operations are the two
 matrix multiplication operations: $op1$ and $op3$, mainly used for
-reorthogonalization to fix float-point rounding errors. The eigensolvers
+reorthogonalization to fix floating-point rounding errors. The eigensolvers
 use $op7$ and $op8$ to access individual columns of a dense matrix,
 so we store the dense matrices in column major by default.
 However, the sparse matrix dense matrix multiplication described in section
@@ -376,17 +391,16 @@ Thus, FlashEigen adds another operation $op9$ to convert data layout
 in dense matrices, which converts a column-major matrix to a row-major
 matrix when it is passed to the SpMM operation.
 
-It is challenging to achieve the performance of external-memory dense matrix
-operations comparable to their in-memory counterparts. Unlike sparse matrix
+External-memory dense matrix operations faces multiple challenges.
+comparable to their in-memory counterparts. Unlike sparse matrix
 multiplication, these dense matrix operations are less memory intensive.
 Even though SSDs are fast, their sequential I/O performance is still an order
 of magnitude slower than RAM.
 Furthermore, SSDs wears out after a certain amount of write \cite{}.
 Even enterprise SSDs \cite{} only allows a small number of DWPD
 (diskful writes per day). Therefore, FlashEigen optimizes dense matrix operations
-with three goals: \textit{(i)} maximizing I/O throughput from SSDs,
-\textit{(ii)} minimizing the amount of data read from SSDs,
-\textit{(iii)} reducing SSD wearout.
+with the goals of minimizing the amount of data read from SSDs and reducing SSD
+wearout.
 
 %\begin{figure}
 %	\begin{center}
@@ -411,7 +425,7 @@ in a row interval is stored contiguously. Unlike a NUMA dense matrix, elements
 in a row interval of an external-memory matrix are stored in column-major order
 for easily accessing individual columns. The size of a row interval is chosen
 according to the number of columns in the matrix to generate large I/O requests,
-in the order of megabytes.
+on the order of megabytes.
 
 Once data in a row interval is loaded to memory, we further partition it to
 smaller row intervals so that data
@@ -472,7 +486,7 @@ stored on SSDs and X indicates a small matrix stored in memory.}
 
 The Anasazi eigensolvers frequently perform a matrix operation on many
 tall-and-skinny matrices and the number of the matrices varies in each iteration.
-The number of matrices can be as large as multiple hundred when an eigensolver
+The number of matrices can be as large as several hundred when an eigensolver
 computes hundreds of eigenvalues. $op1$ and $op3$ are such operations.
 If a thread has to read the data in a row interval from all of the matrices
 before performing computation,
@@ -495,7 +509,7 @@ the lazy evaluation in Section \ref{sec:lazy_eval} and only materialize part of
 the intermediate matrices at a time and passes the materialized parts to
 the addition operation to generate the final result.
 
-For $op3$, an eigensolver usually transopses a group of tall-and-skinny matrices
+For $op3$, an eigensolver usually transposes a group of tall-and-skinny matrices
 and multiply them with a tall-and-skinny matrix. We apply a similar strategy to
 $op3$. We break the large group of dense matrices into multiple groups and each
 group shares the same tall-and-skinny matrix in the right operand. Each group
@@ -530,15 +544,15 @@ and small vectors stored in Anasazi's native matrices and vectors.
 %graph (DAG). Inside this DAG, we do not need to perform any computation other
 %than the last one.
 
-All matrices in FlashEigen are immutable so that \textit{virtual matrices}
-can generate the same result every time when they are materialized. Therefore,
-our implementation of the matrix operations in Table \ref{anasazi_ops} always
-generates new matrices. The original Anasazi matrix operations require in-place
-update on the existing dense matrices, so FlashEigen only passes a pointer to
-a dense matrix to the Anasazi eigensolvers instead of the matrix data.
+%All matrices in FlashEigen are immutable so that \textit{virtual matrices}
+%can generate the same result every time when they are materialized. Therefore,
+%our implementation of the matrix operations in Table \ref{anasazi_ops} always
+%generates new matrices. The original Anasazi matrix operations require in-place
+%update on the existing dense matrices, so FlashEigen only passes a pointer to
+%a dense matrix to the Anasazi eigensolvers instead of the matrix data.
 %This approach is equivalent to variable renaming used by compilers.
-A dense matrix is garbage collected only when there are not any references to
-the matrix.
+%A dense matrix is garbage collected only when there are not any references to
+%the matrix.
 
 %\textit{op7} and \textit{op8} access individual columns and have to be incorporated
 %with the lazy evaluation. The eigensolvers usually access only one column at a time

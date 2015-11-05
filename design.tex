@@ -65,8 +65,9 @@ and continues the process.
 
 The block extenion implemented in the Anasazi eigensolvers updates multiple
 vectors in the subspace in an iteration. This optimization leads to sparse
-matrix dense matrix multiplication and increases computation density to
-improve performance. The number of vectors to be updated together is determined
+matrix dense matrix multiplication, which increases computation density to
+improve performance, as well as a set of dense matrix operations instead of
+vector operations. The number of vectors to be updated together is determined
 by the \textit{block size}, denoted by $b$. The subspace size $m$
 is $b \times NB$, where $NB$ is the number of blocks.
 
@@ -123,15 +124,15 @@ order with the file for future data retrieval.
 \subsection{Sparse matrix multiplication} \label{spmm}
 Sparse matrix multiplication is one of the most computationally expensive
 operations in an eigensolver. Applying this operation on real-world graphs
-usually leads to many random memory accesses, so this operation is usually
+usually leads to many random memory accesses and its performance is usually
 limited by the random memory performance of DRAM. The block extension
 in the Anasazi eigensolvers enables sparse matrix dense matrix multiplication
 to increase data locality and computation density and improve overall performance
 of an eigensolver.
 
 To scale sparse matrix multiplication to a sparse graph with billions of vertices,
-we perform sparse matrix multiplication in semi-external memory (SEM). That is,
-we keep the vectors or dense matrices in memory and the sparse
+we perform this operation in semi-external memory (SEM). That is, we keep dense
+matrices in memory and the sparse
 matrix on SSDs. This strategy enables nearly in-memory performance while achieving
 the scalability in proportion to the ratio of edges to vertices in a graph.
 
@@ -163,7 +164,7 @@ involved in the multiplication with the tile are always kept in the CPU cache
 during the multiplication. The optimal tile size should fill the CPU cache
 with the rows of the dense matrices involved in the multiplication with
 the tile and is affected by the number of columns of the dense matrices,
-which are chosen by users. Instead of generating a sparse matrix with
+which is chosen by users. Instead of generating a sparse matrix with
 different tile sizes optimized for different numbers of columns in the dense
 matrices, we use a relatively small tile size and rely on the runtime system
 to optimize for different numbers of columns (in section \ref{sec:exec}).
@@ -200,9 +201,9 @@ significant bit is used to indicate the beginning of a row, this format allows
 a maximum tile size of $32K \times 32K$.
 
 For many real-world graphs, many rows in a tile have only one non-zero entry,
-thanks to their sparsity and nearly random vertex connection. Storing these
-single-entry rows in the SCSR format requires to move from one row to another
-for every entry, resulting in many extra conditional jump CPU instructions
+thanks to the sparsity of the graphs and nearly random vertex connection.
+Iterating over single-entry rows requires to test the end of a row for every
+non-zero entry, resulting in many extra conditional jump CPU instructions
 in sparse matrix multiplication.
 In contrast, the coordinate format (COO) is more suitable for storing these
 single-entry rows. It does not increase the storage size but significantly
@@ -220,35 +221,35 @@ small storage size even for a billion-node graph. We keep the entire index
 in memory during sparse matrix multiplication.
 
 \subsubsection{The dense matrix format for SpMM} \label{numa_mat}
-Dense matrices in sparse matrix multiplication are tall-and-skinny matrices
+Dense matrices in sparse matrix multiplication are tall-and-skinny (TAS)
+matrices
 with millions or even billions of rows but only several columns. The number
 of rows in a dense matrix is determined by the number of vertices in a sparse
 graph and the number of columns is determined by the \textit{block size}
 in an eigensolver with the block extension. The dense matrix is kept in memory
-for SEM SpMM, so the size of the dense matrix governs the memory consumption
+for semi-external memory (SEM) sparse matrix dense matrix multiplication (SpMM),
+so the size of the dense matrix governs the memory consumption
 of SpMM. Given the limited amount of RAM in a machine, the number of columns
-in a dense matrix has to be small. To increase data locality in SpMM, we organize
-elements of the dense matrices in row-major order, as shown in Figure
-\ref{dense_mat} (a).
+in a dense matrix has to be small.
 
 For a non-uniform memory architecture (NUMA), we partition the input dense matrix
 horizontally and store partitions evenly across NUMA nodes to fully utilize
 the bandwidth of memory and inter-processor links in sparse matrix
 multiplication. The NUMA architecture is prevalent in today's multi-processor
-servers, where each processor connects to its own memory banks. It is essential
-to fully utilize the bandwidth of memory and inter-processor links to achieve
-performance. As shown in Figure \ref{dense_mat} (a), we assign multiple
+servers, where each processor connects to its own memory banks. As shown in
+Figure \ref{dense_mat} (a), we assign multiple
 contiguous rows in a row interval to a partition, which is assigned to a NUMA
 node. A row interval always has $2^i$ rows for efficiently locating a row
 with bit operations. The row interval size is also multiple of the tile size of
 a sparse matrix so that multiplication on a tile only needs to access rows
-from a single row interval.
+from a single row interval. We store elements in a row interval in row-major
+order to increase data locality in SpMM.
 
 \begin{figure}
 \centering
 \includegraphics[scale=0.4]{./dense_matrix.pdf}
 \vspace{-5pt}
-\caption{The data layout of tall-and-skinny dense matrices. A tall-and-skinny
+\caption{The data layout of tall-and-skinny (TAS) dense matrices. A TAS
 dense matrix is partitioned horizontally into many row intervals.
 (a) For an in-memory matrix, row intervals are stored across NUMA nodes and
 elements are stored in row-major order; (b) for an SSD-based matrix, elements
@@ -260,6 +261,9 @@ inside a row interval are stored in column-major order.}
 \subsubsection{Execution of sparse matrix multiplication} \label{sec:exec}
 We perform sparse matrix dense matrix multiplication in semi-external memory
 and optimize it for different numbers of columns in the dense matrices.
+Thanks to the semi-external memory execution, sparse matrix multiplication
+streams data in the sparse matrix from SSDs, which maximizes I/O throughput
+of the SSDs.
 
 We partition a sparse matrix horizontally for parallelization and assign multiple
 contiguous tile rows to the same partition (Figure \ref{sparse_mat}).
@@ -267,11 +271,11 @@ The number of tile rows assigned to a partition is determined at runtime
 based on the number of columns in the input dense matrix. A thread reads
 a partition of the sparse matrix asynchronously from SSDs. Once a partition
 is ready in memory, the worker thread multiplies the partition with the input
-dense matrix. The thread processes one tile at a time and stores
+dense matrix. A thread processes one tile at a time and stores
 the intermediate result in a buffer allocated in the local memory to reduce
-remote memory access. To reduce memory consumption,
-we write the portion of the output dense matrix to SSDs immediately whenever
-it is generated. \dz{Implement this.}
+remote memory access. %To reduce memory consumption,
+%we write the portion of the output dense matrix to SSDs immediately whenever
+%it is generated. \dz{Implement this.}
 
 To better utilize CPU cache, we process tiles of a partition in
 \textit{super tile}s (Figure \ref{sparse_mat}). The tile size of a sparse
@@ -302,43 +306,26 @@ to translate the C code to the vector CPU instructions by predefining the matrix
 width in the code.
 
 When accessing a sparse matrix on SSDs, we keep a set of memory buffers for
-I/O access to reduce the overhead of populating memory buffers with physical
-pages. For a large spare matrix, each tile row is fairly large, on the order
+I/O access to reduce the overhead of memory allocation.
+For a large spare matrix, each tile row is fairly large, on the order
 of tens of megabytes. The operating system usually allocate a memory buffer
-for such I/O size with \textit{mmap()} and populates the buffer with physical
+for such an I/O size with \textit{mmap()} and populates the buffer with physical
 pages when the buffer is used. It is computationally expensive to populate
 large memory buffers frequently. When accessing high-throughput I/O devices,
-such overhead can cause substantial performance loss. However, tile rows
-in a sparse matrix usually have differnt sizes. Therefore, we keep memory buffers
-allocated previously and reuse them for new I/O requests. We resize a previously
-allocated memory buffer if it is too small for a new I/O request.
+such overhead can cause substantial performance loss. Therefore, we keep a set
+of memory buffers allocated previously and reuse them for new I/O requests.
+Because tile rows in a sparse matrix usually have differnt sizes, we resize
+a previously allocated memory buffer if it is too small for a new I/O request.
 
-\subsection{Dense matrix operations}
+\subsection{The vector subspace}
 The vector subspace required by an eigensolver is massive when the eigensolver
 computes eigenvalues of a billion-node graph or computes many eigenvalues
 of a multi-million-node graph. The number of vectors in the subspace
 increases with the number of required eigenvalues. Furthermore, a larger
-number of vectors in the subspace improves the convergence rate of an eigensolver. 
-The storage size required by the subspace is often larger than
+number of vectors in the subspace potentially improves the convergence rate
+of an eigensolver. The storage size required by the subspace is often larger than
 the sparse matrix for eigendecomposition on many real-world graphs. Therefore,
 FlashEigen stores these vectors on SSDs.
-
-The Anasazi framework provides a set of programming interface to expose
-the vectors in the subspace to users as dense matrices and allow users to
-redefine the dense matrices and the operations on them. FlashEigen implements
-the programming interface and stores the vectors of the subspace on SSDs.
-The Anasazi eigensolvers update multiple vectors of the subspace in an iteration
-due to the block extension, so FlashEigen stores multiple vectors in a dense
-matrix physically and the number of vectors in a matrix is determined by
-the block size of a block eigensolver. This design also helps garbage
-collection in lazy evaluation (section \ref{sec:lazy_eval}).
-As such, the subspace is composed of multiple tall-and-skinny dense matrices.
-
-We store each tall-and-skinny matrix in a separate SAFS file to leverage
-the optimizations in SAFS. This guarantees that I/O accesses to the dense
-matrices are evenly distributed to all SSDs by SAFS, regardless of the number of
-SSDs and the subspace size. It also eases matrix creation and deletion by
-simply creating and deleting an SAFS file.
 
 \begin{table}
 	\begin{center}
@@ -365,7 +352,7 @@ simply creating and deleting an SAFS file.
 			\hline
 			\textit{SetBlock} & $AA[,idxs] \leftarrow BB$ & yes \\
 			\hline
-			\textit{MvRandom} & $AA <- rand_init$ & yes \\
+			\textit{MvRandom} & $AA \leftarrow rand\_init$ & yes \\
 			\hline
 			\textit{ConvLayout} & $AA \leftarrow conv\_layout(BB)$ & yes \\
 			\hline
@@ -378,28 +365,31 @@ simply creating and deleting an SAFS file.
 	\label{anasazi_ops}
 \end{table}
 
-FlashEigen requires a set of dense matrix operations shown in Table
-\ref{anasazi_ops}. $op1-8$ are the operations required by the Anasazi
+FlashEigen implements a set of dense matrix operations shown in Table
+\ref{anasazi_ops}. The Anasazi framework provides a set of programming
+interfaces that expose the vectors in the subspace to users as dense matrices
+and allow users to redefine the dense matrices and the operations on them.
+The first ten operations are the ones required by the Anasazi
 framework. The most computationally expensive operations are the two
-matrix multiplication operations: $op1$ and $op3$, mainly used for
-reorthogonalization to fix floating-point rounding errors. The eigensolvers
-use $op7$ and $op8$ to access individual columns of a dense matrix,
-so we store the dense matrices in column major by default.
-However, the sparse matrix dense matrix multiplication described in section
-\ref{spmm} requires a row-major dense matrix to increase data locality.
-Thus, FlashEigen adds another operation $op9$ to convert data layout
+matrix multiplication operations: \textit{MvTimesMatAddMv} and \textit{MvTransMv},
+mainly used for reorthogonalization to fix floating-point rounding errors.
+The eigensolvers use \textit{CloneView} and \textit{SetBlock} to access individual
+columns of a dense matrix, so we store the dense matrices in column major by default.
+However, the sparse matrix dense matrix multiplication described in Section
+\ref{spmm} requires a row-major dense matrix to increase data locality. Thus,
+FlashEigen adds another operation \textit{ConvLayout} to convert data layout
 in dense matrices, which converts a column-major matrix to a row-major
 matrix when it is passed to the SpMM operation.
 
 External-memory dense matrix operations faces multiple challenges.
-comparable to their in-memory counterparts. Unlike sparse matrix
-multiplication, these dense matrix operations are less memory intensive.
-Even though SSDs are fast, their sequential I/O performance is still an order
-of magnitude slower than RAM.
+Unlike sparse matrix multiplication, these dense matrix operations are less
+memory intensive. Even though SSDs are fast, their sequential I/O performance
+is still an order of magnitude slower than RAM.
 Furthermore, SSDs wears out after a certain amount of write \cite{}.
 Even enterprise SSDs \cite{} only allows a small number of DWPD
 (diskful writes per day). Therefore, FlashEigen optimizes dense matrix operations
-with the goals of minimizing the amount of data read from SSDs and reducing SSD
+with three goals: \textit{(i)} maximizing I/O throughput of SSDs, \textit{(ii)}
+minimizing the amount of data read from SSDs, \textit{(iii)} reducing SSD
 wearout.
 
 %\begin{figure}
@@ -415,113 +405,128 @@ wearout.
 %	\end{center}
 %\end{figure}
 
-\subsubsection{Parallelization and external memory access} \label{par_em}
-We partition the tall-and-skinny matrices horizontally for parallelization
+\subsubsection{The storage format of the vector subspace}
+FlashEigen stores multiple vectors in a dense matrix physically because Anasazi
+eigensolvers update multiple vectors of the subspace in an iteration thanks to
+the block extension. The number of vectors in a matrix is determined by
+the \textit{block size} of a block eigensolver. %This design also helps garbage
+%collection in lazy evaluation (section \ref{sec:lazy_eval}).
+As such, the subspace is composed of multiple tall-and-skinny (TAS) dense
+matrices.
+
+FlashEigen stores each TAS matrix in a separate SAFS file to leverage
+the optimizations in SAFS. This guarantees that I/O accesses to the dense
+matrices are evenly distributed to all SSDs by SAFS, regardless of the number
+of SSDs and the subspace size. It also eases matrix creation and deletion by
+simply creating and deleting an SAFS file.
+
+FlashEigen partitions a TAS matrix horizontally to assist in parallelization
 and external-memory access. Figure \ref{dense_mat} (b) illustrates the format
-of an external-memory tall-and-skinny matrix. Like a NUMA dense matrix in
-Figure \ref{dense_mat} (a),
-an external-memory matrix is divided into multiple row intervals and data
-in a row interval is stored contiguously. Unlike a NUMA dense matrix, elements
-in a row interval of an external-memory matrix are stored in column-major order
-for easily accessing individual columns. The size of a row interval is chosen
-according to the number of columns in the matrix to generate large I/O requests,
-on the order of megabytes.
+of an external-memory TAS matrix. Like
+a NUMA dense matrix in Figure \ref{dense_mat} (a), an external-memory matrix
+is divided into multiple row intervals and data in a row interval is stored
+contiguously to generate large I/O requests, on the order of megabytes.
+The size of a row interval is chosen according to the number of columns in the matrix.
+Unlike a NUMA dense matrix, elements in a row interval of an external-memory
+matrix are stored in column-major order for easily accessing individual columns.
 
-Once data in a row interval is loaded to memory, we further partition it to
-smaller row intervals so that data
-in the sub-row interval fits in CPU cache. \dz{TODO: The size of the sub row
-interval should also adapt to the matrix width.} This optimization significantly
-increase CPU cache hits in a sequence of dense matrix operations constructed in
-the lazy evaluation (Section \ref{sec:lazy_eval}).
+\subsubsection{Parallelize matrix operations} \label{sec:par}
+All large dense matrices in FlashEigen are tall and skinny so we partition
+them horizontally for parallelization. All matrix operations in Table
+\ref{anasazi_ops} allow a worker thread to process partitions of a matrix
+independently.
 
-Like sparse matrix multiplication, we maintain a per-thread memory buffer pool
-for I/O access to reduce the overhead of populating memory buffers with
-physical pages when accessing dense matrices on SSDs. To increase I/O throughput,
-we access data in dense
-matrices on SSDs with large I/O requests, which requires large memory buffers.
-Unlike sparse matrix multiplication, all I/O requests for accessing dense
-matrices have the same size. Therefore, we maintain a pool of memory buffers
-with physical pages populated in advance and associate each I/O request with
-a buffer from the set. We maintain such a pool for each worker thread to
-minimize locking overhead.
-
-To parallelize a matrix operation, we assign one row interval at a time to
+All of the matrix operations in Table \ref{anasazi_ops} that outputs TAS
+matrices are embarrassingly parallelizable on the TAS matrices. In these
+operations, a row interval in the output matrix only depends on the same row
+interval from all of the TAS input matrices. Thus, the computation and data
+access to the TAS matrices are completely independent between row intervals.
+To parallelize these matrix operations, we assign one row interval at a time to
 a worker thread. When a worker thread gets a row interval, it owns the row
 interval and is responsible for accessing the data in the row interval from
-all of the tall-and-skinny matrices and performing computation on them.
-When processing a row interval, a worker thread does not need to access data
-from another row interval on SSDs.
-%(Figure \ref{fig:mat_par}).
-Majority of the operations in Table \ref{anasazi_ops} output tall-and-skinny
-matricies whose rows only depend on the same rows from the input matrices.
-For these operations, the computation and data access to the tall-and-skinny
-matrices are completely independant between row intervals. One of the exceptions is
-$op3$, which outputs a small matrix. However, this operation can be split into
-two sub-operations: the first one performs computation on data in the same row
-interval from all of the input matrices and output a small matrix and the computation
-is completely independant between row intervals; the second one sums all of
-the small matrices and outputs a single small matrix. The first sub-operation
-has most of computation in $op3$ and requires external-memory data access,
-so we parallelize it in the same fashion as other operations.
-%This is illustrated in Figure \ref{fig:mat_par}.
-$op6$ can be evaluated in a similar fashion to $op3$. Therefore, all matrix
-operations in Table \ref{anasazi_ops} can be parallelized in the same fashion.
+all of the TAS matrices and performing computation on them. When processing
+a row interval, a worker thread does not need to access data from another row
+interval on SSDs.
 
-%\dz{a large write is required to achieve persistent write performance and
-%wearout?}
+Some of the operations do not output TAS matrices and their outputs depend on
+all row intervals of the input matrices. For example, \textit{MvTransMv}
+outputs a small matrix. These operations can usually be split into two
+sub-operations: the first one performs computation on each row interval
+independently and outputs a small vector or a small matrix; the second one
+aggregates all of the small vectors or matrices and outputs a single small
+vector or matrix. The first sub-operation accounts for most of computation in
+such an operation and requires external-memory data access, so we parallelize
+it in the same fashion as the operations that output TAS matrices.
+
 %We maintain a global work queue of row intervals and dispatch one row interval
 %to a thread at a time. This strategy allows worker threads to process row
 %intervals close to each other, which helps to accumulate very large writes to SSDs.
+
+\subsubsection{External memory access} \label{sec:em}
+I/O access for dense matrix operations is relatively simple. All matrix partitions
+have the same size and each operation requires to access all data in a TAS
+matrix, which results in sequential I/O access. For most of the matrix operations
+in Table \ref{anasazi_ops}, a worker thread reads data in a row interval
+asynchronously and perform computation when all data in the row interval is
+ready in memory. In this section, we describe some optimizations that aim at
+reducing memory consumption and achieving maximal I/O throughput from SSDs.
+
+Keeping data in a row interval from all of the input TAS matrices potentially
+consumes a significant amount of memory if a matrix operation involves in many
+TAS matrices.
+Operations such as \textit{MvTimesMatAddMv} and \textit{MvTransMv} frequently
+take as input many vectors in the subspace, which is stored in multiple TAS
+dense matrices physically. The actual number of TAS matrices involved in
+the two operations varies between iterations and can grow to as large as several
+hundred when an eigensolver computes hundreds of eigenvalues. The storage size
+of a row interval is usually configured on the order of tens of megabytes to
+achieve I/O throughput from SSDs. When there are hundreds of dense matrices in
+the subspace, we may keep a substantial amount of data in memory.
+Reading only part of a partition results in many small reads and writes to
+SSDs because the matrices are organized in column-major order.
+
+Instead, we break a large group of TAS matrices into multiple small groups to
+reduce memory consumption for these matrix operations. Figure \ref{fig:mat_group}
+illustrates this optimization on \textit{MvTimesMatAddMv} and \textit{MvTransMv}.
+For \textit{MvTimesMatAddMv}, we split the small dense matrix horizontally and
+each group of TAS matrices gets a partition of the small dense matrix. Each group
+generates an intermediate TAS matrix conceptually and we apply an addition
+operation on all of the intermediate matrices to generate the final result.
+As such, we perform computation on each group separately and only need to keep
+the data in a row interval from all of the TAS matrices in a group. Therefore,
+memory consumption is determined by the group size instead of the number of TAS
+matrices involved in the operation. Materializing these
+intermediate matrices would result in large memory consumption if we store them
+in memory, or a large amount of I/O if we store them on SSDs. Instead, we leverage
+the lazy evaluation in Section \ref{sec:lazy_eval} and only materialize part of
+the intermediate matrices and passes the materialized parts to
+the addition operation to generate the final result. We apply a similar strategy
+to \textit{MvTransMv}, which requires each group to share the same TAS matrix in
+the right operand. Each group generates a small matrix that is small enough to
+be kept in memory. To minimize I/O, we share I/O for accessing the TAS matrix
+in the right operand.
+
+Like sparse matrix multiplication, we maintain a per-thread memory buffer pool
+for I/O access to reduce the overhead of memory allocation when accessing dense
+matrices on SSDs. To increase I/O throughput, we access data in dense matrices
+on SSDs with large I/O requests. Allocating a large memory buffer for each I/O
+request causes the operating system to populate memory with physical pages
+when the buffer is used and this is a computationally expensive operation.
+Therefore, we maintain a pool of memory buffers
+with physical pages populated in advance and associate each I/O request with
+a buffer from the set. We maintain such a pool for each worker thread to
+minimize locking overhead.
 
 \begin{figure}
 \centering
 \includegraphics[scale=0.4]{./mat_group.pdf}
 \vspace{-5pt}
 \caption{Break a large group of dense matrices in an operation into multiple
-small groups to reduce memory consumption. XX indicates a tall-and-skinny matrix
+small groups to reduce memory consumption. XX indicates a TAS matrix
 stored on SSDs and X indicates a small matrix stored in memory.}
 \vspace{-5pt}
 \label{fig:mat_group}
 \end{figure}
-
-The Anasazi eigensolvers frequently perform a matrix operation on many
-tall-and-skinny matrices and the number of the matrices varies in each iteration.
-The number of matrices can be as large as several hundred when an eigensolver
-computes hundreds of eigenvalues. $op1$ and $op3$ are such operations.
-If a thread has to read the data in a row interval from all of the matrices
-before performing computation,
-the amount of data in memory is still very large. Another option is to read
-only part of a partition, which results in many small reads and writes to SSDs,
-because the matrices are organized in column-major order.
-
-Instead, we break a large group of tall-and-skinny matrices into multiple small
-groups to reduce
-memory consumption when evaluating these operations on them. Figure
-\ref{fig:mat_group} illustrates this optimization on $op1$ and $op3$. For $op1$,
-we split the small dense matrix horizontally and each group of tall-and-skinny
-matrices gets a partition of the small dense matrix. Each group generates
-a intermediate tall-and-skinny matrix conceptually and we apply an addition
-operation on all intermediate matrices to generate the final result.
-Materializing these
-intermediate matrices would result in large memory consumption if we store them
-in memory or a large amount of I/O if we store them on SSDs. Instead, we leverage
-the lazy evaluation in Section \ref{sec:lazy_eval} and only materialize part of
-the intermediate matrices at a time and passes the materialized parts to
-the addition operation to generate the final result.
-
-For $op3$, an eigensolver usually transposes a group of tall-and-skinny matrices
-and multiply them with a tall-and-skinny matrix. We apply a similar strategy to
-$op3$. We break the large group of dense matrices into multiple groups and each
-group shares the same tall-and-skinny matrix in the right operand. Each group
-generates
-a small matrix that can be kept in memory. In this case, all input matrices
-are large and are stored on SSDs. To minimize I/O, we perform operations on
-each group together to share I/O for accessing the tall-and-skinny matrix
-in the right operand.
-
-%\dz{This approach actually can change the computation complexity of dense matrix
-%multiplication. I need to measure its impact on in-memory dense matrix
-%multiplication.}
 
 \subsubsection{Lazy evaluation} \label{sec:lazy_eval}
 Lazy evaluation avoids materializing every dense matrix to reduce the amount
@@ -531,7 +536,7 @@ of a matrix operation. Such a matrix does not store the data of
 an operation result. Instead, it stores the computation and a reference to
 the input matrices. We refer to these special matrices as \textit{virtual matrices}.
 We can evaluate most matrix operations in Table \ref{anasazi_ops} lazily,
-as long as the output matrix of an operation is a tall-and-skinny matrix. Only \textit{op3}
+as long as the output matrix of an operation is a TAS matrix. Only \textit{op3}
 and \textit{op6} cannot be evaluated lazily because they output small matrices
 and small vectors stored in Anasazi's native matrices and vectors.
 
@@ -603,7 +608,7 @@ To perform actual computation, FlashEigen needs to materialize
 encountering \textit{op3} and \textit{op6} because these two operations
 output Anasazi's native matrices and vectors.
 A \textit{virtual matrix} represents some computation on some materialized
-tall-and-skinny matrices stored on SSDs. FlashEigen materializes
+TAS matrices stored on SSDs. FlashEigen materializes
 a \textit{virtual matrix}, which has more than one materialized input matrix,
 to minimize the amount of data read from SSDs.
 %FlashEigen also materializes all of the dense matrices in the basis.
@@ -620,18 +625,17 @@ still in the CPU cache when it is fed to the next operation.
 
 \subsubsection{Matrix caching}
 FlashEigen deploys two forms of matrix caching to reduce I/O to SSDs.
-In the first case, FlashEigen worker threads cache part of a tall-and-skinny
+In the first case, FlashEigen worker threads cache part of a TAS
 matrix locally. In the other case, FlashEigen can also cache the most recent
-tall-and-skinny matrix in the vector subspace.
+TAS matrix in the vector subspace.
 
-Caching part of a tall-and-skinny matrix read from SSDs benefits some of
+Caching part of a TAS matrix read from SSDs benefits some of
 the matrix operations. One example is the optimization for $op3$ in section
-\ref{par_em}, which breaks a large group of dense matrices into multiple
+\ref{sec:em}, which breaks a large group of dense matrices into multiple
 subgroups and the matrix in the right operand is shared by all of the subgroups.
 A worker thread only needs to cache data in a row interval of the right matrix
-that is currently being processed
-because a thread processes one row interval at a time and each row interval of
-the tall-and-skinny matrices is processed only once.
+that is currently being processed because a thread processes one row interval
+at a time and each row interval of the TAS matrices is processed only once.
 Therefore, a worker thread can buffers the data in a row interval of a matrix
 locally and accessing the buffered data doesn't incur any locking overhead.
 
@@ -642,8 +646,8 @@ remains the same. A typical example is transpose. The identifier we give to
 each matrix should identify the data inside a matrix instead of individual matrices,
 so a transposed matrix and its original matrix should share the same identifier.
 
-FlashEigen also caches the most recent tall-and-skinny matrix in the vector
-subspace if the RAM of a machine is sufficient to accommodate the entire matrix.
+FlashEigen also caches the most recent TAS matrix in the vector subspace if
+the RAM of a machine is sufficient to accommodate the entire matrix.
 When a new matrix in the vector subspace is generated by sparse matrix
 multiplication, an eigensolver needs to perform a sequence of operations on it,
 which includes reorgonalization. By caching the matrix in memory, we can

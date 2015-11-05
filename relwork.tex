@@ -19,8 +19,10 @@ are well studied in the literature. For example, Williams et. al
 \cite{Williams07} described multiple optimizations for sparse matrix
 vector multiplication in multicore architecture. Yoo et. al \cite{Yoo11}
 and Boman et. al \cite{Boman2013} optimized SpMV for large scale-free graphs
-using 2D graph partitioning. Sparse matrix multiple vector multiplication
-\cite{Aktulga14}
+using 2D graph partitioning. Aktulga et. al \cite{Aktulga14} optimized sparse
+matrix dense matrix multiplication with cache blocking. In contrast, we
+further advance sparse matrix dense matrix multiplication with a focus on
+optimizations for external memory.
 
 FlashGraph \cite{flashgraph} is a general graph analysis framework. It performs
 graph algorithms in a semi-external memory fashion \cite{sem}, i.e., it keeps
@@ -39,14 +41,8 @@ SSDs to a single machine, our approach can compete with a cluster.
 Zhou et al. \cite{Zhou12} implemented an LOBPCG \cite{Arbenz05} eigensolver in
 an SSD cluster. Their implementation targets nuclear many-body Hamiltonian
 matrices, which are much denser and have smaller dimensions than many sparse
-graphs. Therefore, their solution stores dense matrices in the subspace in RAM.
-Their solution also focus on optimizations in the distributed
-environment. In contrast, we have to store dense matrices in the subspace
-on SSDs due to the large number of vertices in our target graphs. We focus
-on external-memory optimizations in a single machine.
-
-Eigendecomposition
-is a well studied problem and many more advanced algorithms have been proposed
-in the past decades. These algorithms are able to compute eigenpairs with
-different properties such as the largest-magnitude or the smallest-magnitude
-eigenvalues.
+graphs. Therefore, their solution stores the sparse matrix on SSDs and keep
+the entire vector subspace in RAM. Their solution also focus on optimizations
+in the distributed environment. In contrast, we store both the sparse matrix
+and the vector subspace on SSDs due to the large number of vertices in
+our target graphs. We focus on external-memory optimizations in a single machine.

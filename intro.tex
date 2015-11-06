@@ -34,7 +34,7 @@ multiplication for many real-world graphs. Sparse matrix multiplication
 on these graphs induces many small random memory access due to near-random
 vertex connection. It may suffer from load imbalancing because of
 the power-law distribution in vertex degree. Furthermore, graphs cannot be
-clustered or partitioned effectively \cite{Leskovec} to localize access.
+clustered or partitioned effectively \cite{leskovec} to localize access.
 
 %How have others addressed the problem?
 Large-scale eigendecomposition is generally solved in a large cluster
@@ -80,8 +80,8 @@ First, it is challenging to achieve the maximal I/O throughput, on the order
 of ten gigabytes, from a large array of commodity SSDs, due to many overheads
 from the operating system. Even achieving the maximal I/O throughput, SSDs are
 still an order of magnitude slower than DRAM in throughput. Furthermore,
-SSDs wear out after we write data to them. For example, some low-end enterprise
-SSDs \cite{} only allows one DWPD (diskful writes per day). Writing too much
+SSDs wear out after we write data to them. For example, some enterprise
+SSDs \cite{ocz} only allows one DWPD (diskful writes per day). Writing too much
 data to these SSDs drastically shortens their lives and increases operation
 cost.
 

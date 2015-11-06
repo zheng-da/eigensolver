@@ -113,8 +113,8 @@ stripes data in a file across SSDs with a different striping order for each file
 This strategy stores data from multiple files evenly across SSDs and improves
 I/O utialization. Due to the sequential I/O workload, FlashEigen stripes data
 across SSDs with a large block size, on the order of megabytes, to increase I/O
-throughput and potentially reduce write amplification
-on SSDs \cite{}. Such a large block size may cause storage skew for small files
+throughput and potentially reduce write amplification on SSDs \cite{Tang15}.
+Such a large block size may cause storage skew for small files
 on a large SSD array if every file stripes data in the same order. Using
 the same striping order for all files may also cause skew in I/O access.
 Therefore, SAFS generates a random striping order for each file to evenly
@@ -384,9 +384,9 @@ matrix when it is passed to the SpMM operation.
 External-memory dense matrix operations faces multiple challenges.
 Unlike sparse matrix multiplication, these dense matrix operations are less
 memory intensive. Even though SSDs are fast, their sequential I/O performance
-is still an order of magnitude slower than RAM.
-Furthermore, SSDs wears out after a certain amount of write \cite{}.
-Even enterprise SSDs \cite{} only allows a small number of DWPD
+is still an order of magnitude slower than RAM. Furthermore, SSDs wears out
+after a certain amount of write. Even enterprise SSDs \cite{ocz} only allows
+a small number of DWPD
 (diskful writes per day). Therefore, FlashEigen optimizes dense matrix operations
 with three goals: \textit{(i)} maximizing I/O throughput of SSDs, \textit{(ii)}
 minimizing the amount of data read from SSDs, \textit{(iii)} reducing SSD

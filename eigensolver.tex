@@ -124,33 +124,29 @@
 
 
 \subsection*{Abstract}
-Many eigensolvers such as ARPACK and Anasazi have been developed to
-compute eigenvalues of a large sparse matrix. Typically, these
-eigensolvers run in RAM of a single machine for a relatively smaller
-eigenvalue problem or in the distributed memory for a larger problem.
+Many eigensolvers such as ARPACK and Anasazi have been developed to compute
+eigenvalues of a large sparse matrix. These eigensolvers are limited by
+the capacity of RAM. They run in memory of a single machine for smaller
+eigenvalue problems and require the distributed memory for larger problems.
 
-In contrast, we develop an SSD-based eigensolver framework called
-FlashEigen, which extends the Anasazi eigensolvers to SSDs, to compute
-eigenvalues of a graph with hundreds of millions or even billions of
-vertices in a single machine. In these SSD-based eigensolvers, we
-perform sparse matrix dense matrix multiplication (SpMM) in a
-semi-external memory fashion, i.e., we keep the sparse matrix on SSDs
-and the input dense matrix in memory. We specifically optimize the
-SpMM implementation for many real-world graphs that have nearly random
-vertex connection and power-law distribution in vertex degree. Due to
-the sparsity of the real-world graphs, the eigensolvers require large
-storage space for the vector subspace. We store the entire
-vector subspace on SSDs and reduce I/O to improve performance through
-lazy evaluation and caching the most recent dense matrix.
-
-Out result shows that FlashEigen is able to achieve 30\%-50\% performance
-of its in-memory implementation and the original KrylovSchur in the Anasazi
-framework on a machine with 48 CPU cores while it is able to scale to graphs
-with billions of vertices and compute hundreds of eigenvalues at this scale.
-Furthermore, it is
-capable of scaling to a graph with 3.4 billion vertices and 129 billion edges.
-It takes xxx hours to compute xxx singular values of the billion-node direct graph
-and use xxx GB memory.
+In contrast, we develop an SSD-based eigensolver framework called FlashEigen,
+which extends Anasazi eigensolvers to SSDs, to compute eigenvalues of a graph
+with hundreds of millions or even billions of vertices in a single machine.
+FlashEigen performs sparse matrix multiplication in a semi-external memory
+fashion, i.e., we keep the sparse matrix on SSDs and the dense matrix in memory.
+%We specifically optimize the
+%SpMM implementation for many real-world graphs that have nearly random
+%vertex connection and power-law distribution in vertex degree. Due to
+%the sparsity of the real-world graphs, the eigensolvers require large
+%storage space for the vector subspace.
+We store the entire vector subspace on SSDs and reduce I/O to improve
+performance through caching the most recent dense matrix.
+Our result shows that FlashEigen is able to achieve 40\%-60\% performance
+of its in-memory implementation and has performance comparable to the Anasazi
+eigensolvers on a machine with 48 CPU cores. Furthermore, it is capable of
+scaling to a graph with 3.4 billion vertices and 129 billion edges. It takes
+about four hours to compute eight eigenvalues of the billion-node graph using
+120 GB memory.
 
 \section{Introduction}
 \input{intro}

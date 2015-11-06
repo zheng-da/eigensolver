@@ -25,25 +25,31 @@ the eigenvalues of the largest or smallest magnitude. All of these eigensolvers
 perform a sequence of sparse matrix multiplication to construct and update
 a vector subspace $S \in \mathbb{R}^{n \times m}$, where $n$ is the size of
 the eigenproblem and $m$ is the subspace size \cite{Arbenz05}. In addition,
-they perform multiple matrix operations on very large dense matrices that
-stores the vector subspace. When computing eigenpairs of a graph
-at the billion scale, neither the sparse matrix that represents a graph nor
-the dense matrices can be stored in RAM in a single machine.
+they perform matrix operations on the vector subspace. When computing eigenpairs
+of a graph at the billion scale, neither the sparse matrix that represents
+a graph nor the vector subspace fits in the RAM of a single machine.
+
+It is challenging to implement an efficient kernel of sparse matrix
+multiplication for many real-world graphs. Sparse matrix multiplication
+on these graphs induces many small random memory access due to near-random
+vertex connection. It may suffer from load imbalancing because of
+the power-law distribution in vertex degree. Furthermore, graphs cannot be
+clustered or partitioned effectively \cite{Leskovec} to localize access.
 
 %How have others addressed the problem?
-Therefore, large-scale eigendecomposition is generally solved in a large cluster
-or a supercomputer \cite{anasazi, slepc}, where the aggregated memory is
-sufficient to store the sparse matrix and the dense matrices for
-the subspace. However, many real-world graphs have the power-law distribution
-in vertex degree and near-random vertex connection. Sparse matrix multiplication
-on such a graph leads to significant network communication. As such, it requires
-fast network to achieve overall performance. However, a supercomputer or a large
+Large-scale eigendecomposition is generally solved in a large cluster
+\cite{anasazi, slepc}, where the aggregate memory is sufficient to store
+the sparse matrix and the vector subspace. Sparse matrix multiplication
+on graphs in distributed memory leads to significant network communication
+and is usually bottlenecked by the network. As such, this operation requires
+fast network to achieve performance. However, a supercomputer or a large
 cluster with fast network communication is not accessible to many people.
 
 %What is the nature of your solution?
 
-We build FlashEigen, an external-memory eigensolver, to solve a large eigenproblem
-with SSDs in a single machine. 
+We build FlashEigen, an external-memory eigensolver, on top of a user-space
+filesystem called SAFS \cite{safs} to solve a large eigenproblem with SSDs
+in a single machine. 
 %Today's SSDs or SSD arrays
 %are capable of delivering over a million random IOPS or multiple GB/s of
 %sequential I/O \cite{safs}. Given such I/O performance, it is possible to
@@ -59,40 +65,58 @@ eigenvalues of many power-law graphs. The Anasazi eigensolvers implement
 a block extension, which enables the eigensolvers to update multiple vectors
 in the subspace in each iteration to increase computation density and amortize
 I/O overhead. As a result, the eigensolvers require sparse matrix dense matrix
-multiplication (SpMM). We perform SpMM in a semi-external memory fashion, i.e.,
-the sparse matrix on SSDs and the input dense matrix in memory. Given a graph
-with hundreds of millions of vertices or even billions of vertices,
+multiplication (SpMM). Given a graph with hundreds of millions of vertices or
+even billions of vertices,
 the vector subspace constructed by the eigensolvers requires very large storage
 size, usually much larger than the sparse matrix. Therefore, FlashEigen stores
 the entire vector subspace on SSDs.
 
+% Why is it new/different/special?
+
 Although SSDs can deliver high IOPS and sequential I/O throughput, we have
 to overcome many technical challenges to construct an external-memory
 eigensolver with performance comparable to in-memory eigensolvers.
-SSDs are an order of magnitude slower than DRAM in throughput. Furthermore,
-SSDs wear out after we write data to them. For example, some enterprise SSDs
-\cite{} only allows one DWPD (diskful writes per day).
+First, it is challenging to achieve the maximal I/O throughput, on the order
+of ten gigabytes, from a large array of commodity SSDs, due to many overheads
+from the operating system. Even achieving the maximal I/O throughput, SSDs are
+still an order of magnitude slower than DRAM in throughput. Furthermore,
+SSDs wear out after we write data to them. For example, some low-end enterprise
+SSDs \cite{} only allows one DWPD (diskful writes per day). Writing too much
+data to these SSDs drastically shortens their lives and increases operation
+cost.
 
-We specifically optimize semi-external memory sparse matrix dense matrix
-multiplication for many real-world graphs that have nearly random vertex
-connection and power-law distribution in vertex degree. We deploy a series of
-optimizations for both in-memory computation and I/O.
-NUMA, blocking, vectorization, compress sparse matrix, split the dense matrix
-so that we can still use semi-external memory SpMM.
+We perform SpMM in a semi-external memory (SEM) fashion, which keeps
+the sparse matrix on SSDs and dense matrices in memory. This operation streams
+rows in the sparse matrix to memory and multiplies with the dense matrix in
+memory, which generates sequential I/O and allows us to yield maximal I/O
+throughput from SSDs. While maximizing the I/O throughput, we also compress
+the sparse matrix to further accelerate retrieving the sparse matrix from SSDs.
+The SEM strategy incorporates well with in-memory optimizations for SpMM.
+We deploy multiple in-memory optimizations specifically designed for power-law
+graphs. For example, we assign partitions of the sparse matrix dynamically to
+threads for load balancing, deploy cache blocking to increase CPU cache hits,
+partition and evenly distribute the dense matrix to NUMA nodes to fully utilize
+the memory bandwidth of a NUMA machine.
 
-We further deploy optimizations on dense matrix operations to reduce I/O and
-fully utilize the I/O bandwidth of the SSDs.
-To reduce I/O and the amount of data written to SSDs, we use lazy evaluation.
-caching if the dense matrix is very narrow.
-
-% Why is it new/different/special?
+We deploy optimizations on dense matrix operations to reduce I/O and fully
+utilize the I/O bandwidth of the SSDs. Thanks to the block extension of
+the Anasazi eigensolvers, we group multiple vectors together into a column-major
+dense matrix and store each dense matrix in a separate SAFS file for efficient
+I/O access to any vectors in the subspace. When accessing a large number of dense
+matrices in a single operation, we group dense matrices to constrain memory
+consumption of the matrix operation to improve its scalability. To reduce I/O
+and alleviate SSD wear out, we use deploy lazy evaluation and cache the most
+recent dense matrix in the subspace.
 
 % What are it's key features?
 
-Out result shows that the SSD-based KrylovSchur eigensolver is able to achieve
-about 50\% performance of its in-memory implementation and the original
-KrylovSchur in the Anasazi framework on a machine with 48 CPU cores for
-computing various numbers of eigenvalues. Furthermore, it is
-capable of scaling to a graph with 3.4 billion vertices and 129 billion edges.
-It takes xxx hours to compute xxx singular values of the billion-node direct graph
-and use xxx GB memory.
+Our result shows that for many real-world sparse graphs, the SSD-based
+eigensolver is able to achieve 40\%-60\%
+performance of its in-memory implementation and has performance comparable to
+the Anasazi eigensolver on a machine with 48 CPU cores for computing various
+numbers of eigenvalues. We further demonstrate that the SSD-based eigensolver
+is capable of scaling to a graph with 3.4 billion vertices and 129 billion edges.
+It takes about 4 hours to compute eight eigenvalues of the billion-node graph
+and use 120 GB memory. We conclude that our solution offers new design
+possibilities for large-scale eigendecomposition, replacing memory with larger
+and cheaper SSDs and processing bigger problems on fewer machines.

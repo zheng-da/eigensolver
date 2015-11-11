@@ -17,8 +17,8 @@ We conduct all experiments on a non-uniform memory architecture machine with
 four Intel Xeon E7-4860 processors, clocked at 2.6 GHz, and 1TB memory of
 DDR3-1600. Each processor has 12 cores. The machine has three LSI SAS 9300-8e
 host bus adapters (HBA) connected to a SuperMicro storage chassis, in which
-24 OCZ Intrepid 3000 SSDs are installed. The 24 SSDs together deliver
-approximately XXX GB/s for read and XXX GB/s for write. The machine runs
+24 OCZ Intrepid 3000 SSDs are installed. The 24 SSDs together are capable of
+delivering 12 GB/s for read and 10 GB/s for write at maximum. The machine runs
 Linux kernel v3.13.0. We use 48 threads for most of experiments by default.
 
 \begin{table}
@@ -32,7 +32,7 @@ Twitter \cite{twitter} & $42$M & $1.5$B & Yes \\
 \hline
 Friendster \cite{friendster} & $65$M & $1.7$B & No \\
 \hline
-W \cite{} & $62$M & $12$B & No \\
+KNN distance graph \cite{} & $62$M & $12$B & No \\
 \hline
 Page \cite{web_graph} & $3.4$B & $129$B & Yes \\
 %\hline
@@ -49,10 +49,12 @@ Page \cite{web_graph} & $3.4$B & $129$B & Yes \\
 We use the real-world graphs in Table \ref{graphs} for evaluation. The largest
 graph is the page graph with 3.4 billion vertices and 129 billion edges.
 The smallest graph we use has 42 million vertices and 1.5 billion edges.
-Twitter and Friendster are social network graphs. W is a similarity graph
-generated from XXX. Majority of the vertices in this graph has degree between
-$100$ to $1000$, so this graph does not follow the power-law distribution
-in vertex degree.
+Twitter and Friendster are social network graphs. The KNN distance graph is
+a symmetrized 100-nearest neighbor adjacency graph with cosine distance as
+the edge weight. The distance graph is generated over all frames of the Babel
+Tagalog corpus, commonly used in speech recognition. Majority of the vertices
+in this graph has degree between $100$ to $1000$, so this graph does not follow
+the power-law distribution in vertex degree.
 The page graph is clustered by domain, generating good CPU cache hit rates
 in sparse matrix dense matrix multiplication.
 
@@ -168,18 +170,29 @@ implementations can still outperform MKL by $2-3$ times in most settings.
 	\end{center}
 \end{figure}
 
-%\begin{figure}
-%	\begin{center}
-%		\footnotesize
-%		\vspace{-15pt}
-%		\include{SpMM-W0}
-%		\vspace{-15pt}
-%		\caption{The runtime of in-memory SpMM (FE-IM) and SEM-SpMM (FE-SEM)
-%			in the FlashEigen, the MKL and the Trilinos implementation on
-%		the W graph.}
-%		\label{perf:spmm}
-%	\end{center}
-%\end{figure}
+\begin{figure}[t]
+\centering
+\footnotesize
+\vspace{-15pt}
+\begin{subfigure}{.5\linewidth}
+	\include{spmm1}
+	\vspace{-15pt}
+	\caption{SpMV}
+	\label{fig:spmm1}
+\end{subfigure}%
+\begin{subfigure}{.5\linewidth}
+	\include{spmm4}
+	\vspace{-15pt}
+	\caption{SpMM}
+	\label{fig:spmm4}
+\end{subfigure}
+\caption{The performance of Trilinos and FlashEigen-SEM sparse matrix
+multiplication relative to FlashEigen-IM sparse matrix multiplication.
+In sparse matrix dense multiplication (SpMM), there are four columns
+in the dense matrix.}
+\vspace{-15pt}
+\label{fig:spmm}
+\end{figure}
 
 %\begin{figure}
 %	\footnotesize
@@ -257,8 +270,6 @@ of thread context switches in high-throughput I/O access.
 		\label{perf:dmm_opts}
 	\end{center}
 \end{figure}
-
-\dz{demonstrate that SAFS outperforms software RAID for sequential I/O access.}
 
 \subsubsection{Dense matrix multiplication performance}
 
@@ -365,26 +376,26 @@ We compute different numbers of eigenvalues on the three smaller graphs in
 Table \ref{graphs}. Only our SEM eigensolver is able to compute eigenvalues
 on the page graph on the 1TB-memory machine.
 
-\begin{figure}
-	\begin{center}
-		\footnotesize
-		\vspace{-15pt}
-		\include{eigen-runtime}
-		\vspace{-15pt}
-		\caption{The runtime of the three KrylovSchur implementations.}
-		\label{perf:eigen_rt}
-	\end{center}
-\end{figure}
-
-\begin{figure}
-	\begin{center}
-		\footnotesize
-		\vspace{-15pt}
-		\include{eigen-decompose}
-		\vspace{-15pt}
-		\caption{.}
-		\label{perf:eigen_decompose}
-	\end{center}
+\begin{figure}[t]
+\centering
+\footnotesize
+\vspace{-15pt}
+\begin{subfigure}{.5\linewidth}
+	\include{eigen-runtime-8ev}
+	\vspace{-15pt}
+	\caption{8 eigenvalues.}
+	\label{fig:eigen8}
+\end{subfigure}%
+\begin{subfigure}{.5\linewidth}
+	\include{eigen-runtime-32ev}
+	\vspace{-15pt}
+	\caption{32 eigenvalues.}
+	\label{fig:eigen32}
+\end{subfigure}
+\caption{The performance of the Trilinos KrylovSchur and FlashEigen-EM
+KrylovSchur relative to the FlashEigen-IM KrylovSchur.}
+\vspace{-15pt}
+\label{fig:eigen}
 \end{figure}
 
 Our SEM eigensolver achieves at least 30\% performance of our in-memory
@@ -403,17 +414,17 @@ over 90\% of runtime in the SEM eigensolver for computing a large number of
 eigenvalues. For many spectral analysis tasks, users only require a small number
 of eigenvalues.
 
-\begin{figure}
-	\begin{center}
-		\footnotesize
-		\vspace{-15pt}
-		\include{eigen-mem}
-		\vspace{-15pt}
-		\caption{The memory consumptioin of the three KrylovSchur
-		implementations.}
-		\label{perf:eigen_mem}
-	\end{center}
-\end{figure}
+%\begin{figure}
+%	\begin{center}
+%		\footnotesize
+%		\vspace{-15pt}
+%		\include{eigen-mem}
+%		\vspace{-15pt}
+%		\caption{The memory consumptioin of the three KrylovSchur
+%		implementations.}
+%		\label{perf:eigen_mem}
+%	\end{center}
+%\end{figure}
 
 The SEM eigensolver uses a small fraction of memory used by its in-memory
 counterparts and the original Trilinos eigensolver and its memory consumption
@@ -426,24 +437,25 @@ increases memory available to the eigensolver. We have to point out that our
 experiments assume that we choose the subspace size that is not constrained by
 the memory size in a machine.
 
+FlashEigen has memory consumption linear to the number of vertices in a graph.
+It keeps two $n \times b$ dense matrices in memory and each worker thread
+keeps a fixed number of buffers for I/O, which is usually constant on a given
+machine.
+
 \dz{report I/O to show how well the optimizations can reduce I/O.}
 
-\dz{Performance, I/O vs. the number of cached matrices}
+\begin{figure}
+	\begin{center}
+		\footnotesize
+		\vspace{-15pt}
+		\include{diff_cache}
+		\vspace{-15pt}
+		\caption{}
+		\label{perf:cache}
+	\end{center}
+\end{figure}
 
-\subsubsection{External memory vs. distributed memory}
-
-The dense matrix operations in the eigensolvers are embarassingly parallelizable,
-so the distributed memory solution can speed up these operations linearly.
-However, it is very difficult to speed up sparse matrix multiplication with
-more machines.
-The external-memory solution may win the distributed memory solution
-in the following cases:
-
-\begin{itemize} \itemsep1pt \parskip0pt \parsep0pt
-	\item compute fewer eigenvalues,
-	\item on a denser graph,
-	\item on a larger graph,
-\end{itemize}
+\dz{Show larger block size is benefitial.}
 
 \subsubsection{Scale to billion-node graphs}
 
@@ -465,7 +477,7 @@ to compute eigenvalues on the page graph with 1TB RAM.
 			\hline
 			8 & 4.2 hours & 120GB & 145TB & 4TB \\
 			\hline
-			32 & & & & \\
+			32 & 13.3 hours &  &  & \\
 			\hline
 		\end{tabular}
 		\normalsize

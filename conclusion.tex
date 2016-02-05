@@ -32,5 +32,11 @@ eigensolver has less than 50\% performance loss. We further show that our extern
 memory eigensolver is able to scale a graph with 3.4 billion vertices and 129
 billion edges. It finishes eigendecomposition within a reasonable amount of time
 and consumes a fairly small amount of resources. This suggests that our external-
-memory eigensolver is able to scale to even a large eigenvalue problem in our
+memory eigensolver is able to scale to even a larger eigenvalue problem in our
 1TB-RAM machine.
+
+We are able to scale to much larger graphs.
+Given the same amount of resources, SSDs significantly extends the memory capacity
+and give users the freedom of choosing the optimal subspace size for better convergence.
+Our solution also works better for relatively denser graphs.
+Our solution works better for computing a small number of eigenvalues.

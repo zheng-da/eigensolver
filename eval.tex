@@ -108,12 +108,9 @@ columns, the rows from
 the input and output matrices can no longer be in the CPU cache. Thus, it even
 has a little negative effect on the Friendster graph when the dense matrices
 have $16$ columns. However, we never use dense matrices with more than four
-columns in sparse matrix multiplication in the KrylovSchur eigensolver, which
-we evaluate in section \ref{perf:KrylovSchur}. With all optimizations, we
-have a fast in-memory sparse matrix dense matrix multiplication, denoted by
-FE-IM SpMM.
-
-\dz{We might want to show the effectiveness of load balancing as well.}
+columns in sparse matrix multiplication in the KrylovSchur eigensolver.
+With all optimizations, we have a fast in-memory sparse matrix dense matrix
+multiplication, denoted by FE-IM SpMM.
 
 \begin{figure}
 	\begin{center}
@@ -127,17 +124,6 @@ FE-IM SpMM.
 		\label{perf:spmm_opt}
 	\end{center}
 \end{figure}
-
-We start SEM SpMM with FE-IM SpMM and move the sparse matrix to SSDs. Then we
-apply the I/O optimizations in the following order:
-\begin{itemize} \itemsep1pt \parskip0pt \parsep0pt
-	\item compress a sparse matrix,
-	\item use one I/O thread per NUMA node (\textit{1IOT}),
-	\item use I/O polling in worker threads (\textit{polling}),
-	\item use a per-thread buffer pool to allocate memory for I/O
-		(\textit{buf pool}),
-	\item use 8MB for the maximal block size in the kernel (\textit{max block}),
-\end{itemize}
 
 \subsubsection{SpMM performance}
 
@@ -273,16 +259,6 @@ of thread context switches in high-throughput I/O access.
 
 \subsubsection{Dense matrix multiplication performance}
 
-Figure \ref{perf:gemm} show the performance of the in-memory and external-memory
-dense matrix multiplication in the first form. We omit the performance result
-of dense matrix multiplication in the second form because it is very similar
-to the first form and MKL cannot parallelize it.
-The external-memory multiplication in FlashEigen is roughly 3-6 times slower
-than its in-memory counterpart. In the dense matrix multiplication of
-the first form, the in-memory implementation outperforms MKL and Trilinos
-when the number of the columns get larger and MKL does not have a parallel
-implementation for the dense matrix multiplication of the second form.
-
 \begin{figure}
 	\begin{center}
 		\footnotesize
@@ -296,18 +272,15 @@ implementation for the dense matrix multiplication of the second form.
 	\end{center}
 \end{figure}
 
-%\begin{figure}
-%	\begin{center}
-%		\footnotesize
-%		\vspace{-15pt}
-%		\include{MvTransMv}
-%		\vspace{-15pt}
-%		\caption{The runtime of dense matrix multiplication in $op3$. We compare
-%			in-memory (FE-IM) and external-memory (FE-EM) implementations
-%			in FlashEigen with the Trilinos implementations.}
-%		\label{perf:mvtransmv}
-%	\end{center}
-%\end{figure}
+Figure \ref{perf:gemm} show the performance of the in-memory and external-memory
+dense matrix multiplication in the first form. We omit the performance result
+of dense matrix multiplication in the second form because it is very similar
+to the first form and MKL cannot parallelize it.
+The external-memory multiplication in FlashEigen is roughly 3-6 times slower
+than its in-memory counterpart. In the dense matrix multiplication of
+the first form, the in-memory implementation outperforms MKL and Trilinos
+when the number of the columns get larger and MKL does not have a parallel
+implementation for the dense matrix multiplication of the second form.
 
 \begin{figure}
 	\begin{center}
@@ -398,14 +371,12 @@ KrylovSchur relative to the FlashEigen-IM KrylovSchur.}
 \label{fig:eigen}
 \end{figure}
 
-Our SEM eigensolver achieves at least 30\% performance of our in-memory
+Our SEM eigensolver achieves at least 40\% performance of our in-memory
 eigensolver, while the in-memory eigensolver outperforms the original
-KrylovSchur eigensolver (Figure \ref{perf:eigen_rt}). The SEM eigensolver
+KrylovSchur eigensolver (Figure \ref{fig:eigen}). The SEM eigensolver
 is more efficient to compute a small number of eigenvalues and is able
 to achieve around 50\% performance of our in-memory eigensolver.
-The performance gap between the in-memory and SEM eigensolvers with the number
-of eigenvalues to compute, and the increase of the performance gap can be
-explained by Figure \ref{perf:eigen_decompose}. SpMM and reorthogonalization
+SpMM and reorthogonalization
 account for most of computation time when computing a small number of eigenvalues,
 but reorthogonalization eventually dominates the eigendecomposition for computing
 many eigenvalues. Because external-memory dense matrix multiplication is several
@@ -413,18 +384,6 @@ times slower than the in-memory implementations, reorthogonalization accounts fo
 over 90\% of runtime in the SEM eigensolver for computing a large number of
 eigenvalues. For many spectral analysis tasks, users only require a small number
 of eigenvalues.
-
-%\begin{figure}
-%	\begin{center}
-%		\footnotesize
-%		\vspace{-15pt}
-%		\include{eigen-mem}
-%		\vspace{-15pt}
-%		\caption{The memory consumptioin of the three KrylovSchur
-%		implementations.}
-%		\label{perf:eigen_mem}
-%	\end{center}
-%\end{figure}
 
 The SEM eigensolver uses a small fraction of memory used by its in-memory
 counterparts and the original Trilinos eigensolver and its memory consumption
@@ -437,25 +396,17 @@ increases memory available to the eigensolver. We have to point out that our
 experiments assume that we choose the subspace size that is not constrained by
 the memory size in a machine.
 
-FlashEigen has memory consumption linear to the number of vertices in a graph.
-It keeps two $n \times b$ dense matrices in memory and each worker thread
-keeps a fixed number of buffers for I/O, which is usually constant on a given
-machine.
-
-\dz{report I/O to show how well the optimizations can reduce I/O.}
-
-\begin{figure}
-	\begin{center}
-		\footnotesize
-		\vspace{-15pt}
-		\include{diff_cache}
-		\vspace{-15pt}
-		\caption{}
-		\label{perf:cache}
-	\end{center}
-\end{figure}
-
-\dz{Show larger block size is benefitial.}
+%\begin{figure}
+%	\begin{center}
+%		\footnotesize
+%		\vspace{-15pt}
+%		\include{diff_cache}
+%		\vspace{-15pt}
+%		\caption{The performance impact of caching more vectors in the subspace
+%		in FlashEigen}
+%		\label{perf:cache}
+%	\end{center}
+%\end{figure}
 
 \subsubsection{Scale to billion-node graphs}
 
@@ -476,8 +427,6 @@ to compute eigenvalues on the page graph with 1TB RAM.
 			\#eigenvalues & runtime & memory & read & write \\
 			\hline
 			8 & 4.2 hours & 120GB & 145TB & 4TB \\
-			\hline
-			32 & 13.3 hours &  &  & \\
 			\hline
 		\end{tabular}
 		\normalsize

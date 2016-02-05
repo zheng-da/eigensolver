@@ -82,28 +82,11 @@ sparse matrix multiplication and dense matrix operations
 generate much fewer but much larger I/O. Therefore, we provide additional
 optimizations to maximize sequential I/O throughput from a large SSD array.
 
-The original SAFS has a dedicated I/O thread for each SSD. The I/O thread
-accesses the SSD exclusively to avoid lock contention in the Linux kernel.
-Application threads have to send I/O requests to one of the I/O threads
-with message passing when accessing data from SSDs. It is necessary to have
-one I/O thread for
-an SSD when applications issue many small I/O accesses because processing
-a large number of I/O accesses consumes a significant number of CPU cycles.
-However, when the workload only has large I/O requests, each I/O request takes
-much longer time to complete. As a result, the I/O threads are constantly put
-into sleep while waiting for I/O and each I/O completion may suffer from
-the latency of a thread context switch.
-
 The latency of a thread context switch becomes noticeable on a high-speed SSD
 array under a sequential I/O workload and it becomes critical to avoid thread
-context switch to gain I/O performance. Therefore, instead of having an I/O
-thread for each SSD, we use only a single I/O thread for each NUMA node, which
-is responsible for all of the SSDs connected to the NUMA node. As such, an I/O
-thread processes many more I/O requests to amortize the latency of a context
-switch. Similarly, application threads communicate with I/O threads through
-message passing when issuing I/O requests. If the computation in application
-threads did not saturate CPU, SAFS would put the application threads into
-sleep while they were waiting for I/O. This results in many thread context
+context switch to gain I/O performance. If the computation in application
+threads does not saturate CPU, SAFS will put the application threads into
+sleep while they are waiting for I/O. This results in many thread context
 switches and underutilization of both CPU and SSDs. To saturate I/O,
 an application thread issues asynchronous I/O and poll for I/O to avoid thread
 context switches after completing all computation available to it.
@@ -332,29 +315,29 @@ FlashEigen stores these vectors on SSDs.
 		\small
 		\begin{tabular}{|c|c|c|c|c|}
 			\hline
-			name & operation & customized output \\
+			name & operation \\
 			\hline
-			\textit{MvTimesMatAddMv} & $CC \leftarrow \alpha \times AA \times B + \beta \times CC$ & yes \\
+			\textit{MvTimesMatAddMv} & $CC \leftarrow \alpha \times AA \times B + \beta \times CC$ \\
 			\hline
-			\textit{MvTransMv} & $A \leftarrow \alpha \times t(AA) \times BB$ & no \\
+			\textit{MvTransMv} & $A \leftarrow \alpha \times t(AA) \times BB$ \\
 			\hline
-			\textit{MvScale1} & $BB \leftarrow \alpha \times AA$ & yes \\
+			\textit{MvScale1} & $BB \leftarrow \alpha \times AA$ \\
 			\hline
-			\textit{MvScale2} & $BB \leftarrow AA \times diag(vec)$ & yes \\
+			\textit{MvScale2} & $BB \leftarrow AA \times diag(vec)$ \\
 			\hline
-			\textit{MvAddMv} & $CC \leftarrow \alpha \times AA + \beta \times BB$ & yes \\
+			\textit{MvAddMv} & $CC \leftarrow \alpha \times AA + \beta \times BB$ \\
 			\hline
-			\textit{MvDot} & $vec[i] \leftarrow t(AA[,i]) * BB[,i]$ & no \\
+			\textit{MvDot} & $vec[i] \leftarrow t(AA[,i]) * BB[,i]$ \\
 			\hline
-			\textit{MvNorm} & $vec \leftarrow norm\_col(AA)$ & no \\
+			\textit{MvNorm} & $vec \leftarrow norm\_col(AA)$ \\
 			\hline
-			\textit{CloneView} & $AA[,idxs]$ & yes \\
+			\textit{CloneView} & $AA[,idxs]$ \\
 			\hline
-			\textit{SetBlock} & $AA[,idxs] \leftarrow BB$ & yes \\
+			\textit{SetBlock} & $AA[,idxs] \leftarrow BB$ \\
 			\hline
-			\textit{MvRandom} & $AA \leftarrow rand\_init$ & yes \\
+			\textit{MvRandom} & $AA \leftarrow rand\_init$ \\
 			\hline
-			\textit{ConvLayout} & $AA \leftarrow conv\_layout(BB)$ & yes \\
+			\textit{ConvLayout} & $AA \leftarrow conv\_layout(BB)$ \\
 			\hline
 		\end{tabular}
 		\normalsize
@@ -409,8 +392,7 @@ wearout.
 FlashEigen stores multiple vectors in a dense matrix physically because Anasazi
 eigensolvers update multiple vectors of the subspace in an iteration thanks to
 the block extension. The number of vectors in a matrix is determined by
-the \textit{block size} of a block eigensolver. %This design also helps garbage
-%collection in lazy evaluation (section \ref{sec:lazy_eval}).
+the \textit{block size} of a block eigensolver.
 As such, the subspace is composed of multiple tall-and-skinny (TAS) dense
 matrices.
 
@@ -495,10 +477,9 @@ operation on all of the intermediate matrices to generate the final result.
 As such, we perform computation on each group separately and only need to keep
 the data in a row interval from all of the TAS matrices in a group. Therefore,
 memory consumption is determined by the group size instead of the number of TAS
-matrices involved in the operation. Materializing these
-intermediate matrices would result in large memory consumption if we store them
-in memory, or a large amount of I/O if we store them on SSDs. Instead, we leverage
-the lazy evaluation in Section \ref{sec:lazy_eval} and only materialize part of
+matrices involved in the operation. Materializing these intermediate matrices
+would result in large memory consumption if we store them in memory, or a large
+amount of I/O if we store them on SSDs. Instead, we only materialize part of
 the intermediate matrices and passes the materialized parts to
 the addition operation to generate the final result. We apply a similar strategy
 to \textit{MvTransMv}, which requires each group to share the same TAS matrix in
@@ -528,17 +509,17 @@ stored on SSDs and X indicates a small matrix stored in memory.}
 \label{fig:mat_group}
 \end{figure}
 
-\subsubsection{Lazy evaluation} \label{sec:lazy_eval}
-Lazy evaluation avoids materializing every dense matrix to reduce the amount
-of data read and written to SSDs.
-To enable lazy evaluation, we define a special matrix to represent the output
-of a matrix operation. Such a matrix does not store the data of
-an operation result. Instead, it stores the computation and a reference to
-the input matrices. We refer to these special matrices as \textit{virtual matrices}.
-We can evaluate most matrix operations in Table \ref{anasazi_ops} lazily,
-as long as the output matrix of an operation is a TAS matrix. Only \textit{op3}
-and \textit{op6} cannot be evaluated lazily because they output small matrices
-and small vectors stored in Anasazi's native matrices and vectors.
+%\subsubsection{Lazy evaluation} \label{sec:lazy_eval}
+%Lazy evaluation avoids materializing every dense matrix to reduce the amount
+%of data read and written to SSDs.
+%To enable lazy evaluation, we define a special matrix to represent the output
+%of a matrix operation. Such a matrix does not store the data of
+%an operation result. Instead, it stores the computation and a reference to
+%the input matrices. We refer to these special matrices as \textit{virtual matrices}.
+%We can evaluate most matrix operations in Table \ref{anasazi_ops} lazily,
+%as long as the output matrix of an operation is a TAS matrix. Only \textit{op3}
+%and \textit{op6} cannot be evaluated lazily because they output small matrices
+%and small vectors stored in Anasazi's native matrices and vectors.
 
 %With \textit{virtual matrices}, we construct a directed acyclic graph (DAG)
 %at runtime to represent computation in FlashEigen. In the DAG, we store
@@ -603,25 +584,25 @@ and small vectors stored in Anasazi's native matrices and vectors.
 %\label{dag}
 %\end{figure}
 
-To perform actual computation, FlashEigen needs to materialize
-\textit{virtual matrices}. It materializes a \textit{virtual matrix} when
-encountering \textit{op3} and \textit{op6} because these two operations
-output Anasazi's native matrices and vectors.
-A \textit{virtual matrix} represents some computation on some materialized
-TAS matrices stored on SSDs. FlashEigen materializes
-a \textit{virtual matrix}, which has more than one materialized input matrix,
-to minimize the amount of data read from SSDs.
+%To perform actual computation, FlashEigen needs to materialize
+%\textit{virtual matrices}. It materializes a \textit{virtual matrix} when
+%encountering \textit{op3} and \textit{op6} because these two operations
+%output Anasazi's native matrices and vectors.
+%A \textit{virtual matrix} represents some computation on some materialized
+%TAS matrices stored on SSDs. FlashEigen materializes
+%a \textit{virtual matrix}, which has more than one materialized input matrix,
+%to minimize the amount of data read from SSDs.
 %FlashEigen also materializes all of the dense matrices in the basis.
 
-A \textit{virtual matrix} may contain a sequence of operations, so materializing
-it may trigger matrix materialization recursively. We discard the materialized
-partition of an intermediate matrix, once it is no longer needed, to avoid
-writing data of an intermediate matrix to SSDs.
-We partition a \textit{virtual matrix} horizontally in the same fashion as
-the external-memory matrices and materialize each partation independantly. 
-To increase CPU cache hits, we use a much smaller partition size than
-the external-memory matrix. As such, the output of the previous operation is
-still in the CPU cache when it is fed to the next operation.
+%A \textit{virtual matrix} may contain a sequence of operations, so materializing
+%it may trigger matrix materialization recursively. We discard the materialized
+%partition of an intermediate matrix, once it is no longer needed, to avoid
+%writing data of an intermediate matrix to SSDs.
+%We partition a \textit{virtual matrix} horizontally in the same fashion as
+%the external-memory matrices and materialize each partation independantly. 
+%To increase CPU cache hits, we use a much smaller partition size than
+%the external-memory matrix. As such, the output of the previous operation is
+%still in the CPU cache when it is fed to the next operation.
 
 \subsubsection{Matrix caching}
 FlashEigen deploys two forms of matrix caching to reduce I/O to SSDs.
